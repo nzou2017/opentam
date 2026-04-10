@@ -1,0 +1,22 @@
+{
+  "name": "@opentam/proxy",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "fastify": "^4.27.0",
+    "@fastify/cors": "^9.0.0",
+    "node-html-parser": "^6.1.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  },
+  "license": "AGPL-3.0",
+  "author": "Ning Zou <q.cue.2026@gmail.com>"
+}

@@ -1,0 +1,8 @@
+{
+  "/crawl/page": "app/crawl/page.js",
+  "/page": "app/page.js",
+  "/feature-requests/page": "app/feature-requests/page.js",
+  "/login/page": "app/login/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/settings/model/page": "app/settings/model/page.js"
+}

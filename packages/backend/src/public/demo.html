@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenClaw — Gateway Settings</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f8fafc;
+      color: #1e293b;
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 220px;
+      background: #0f172a;
+      color: #94a3b8;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      flex-shrink: 0;
+      min-height: 100vh;
+    }
+    .sidebar-logo {
+      padding: 20px 16px 16px;
+      border-bottom: 1px solid #1e293b;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .sidebar-logo .logo-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #e11d48 0%, #f97316 100%);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .sidebar-logo .logo-text {
+      font-size: 15px;
+      font-weight: 700;
+      color: #f1f5f9;
+    }
+    .sidebar-logo .logo-version {
+      font-size: 10px;
+      color: #475569;
+      margin-top: 1px;
+    }
+    nav { padding: 12px 8px; flex: 1; }
+    .nav-section {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #475569;
+      padding: 12px 8px 6px;
+    }
+    nav a {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 13px;
+      color: #94a3b8;
+      transition: background 0.1s, color 0.1s;
+      cursor: pointer;
+      margin-bottom: 1px;
+    }
+    nav a:hover { background: #1e293b; color: #e2e8f0; }
+    nav a.active { background: #1d4ed8; color: #fff; }
+    nav a .icon { font-size: 15px; flex-shrink: 0; }
+
+    /* Main content */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    .topbar {
+      background: #fff;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 0 28px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .topbar-title { font-size: 15px; font-weight: 600; color: #0f172a; }
+    .topbar-actions { display: flex; align-items: center; gap: 10px; }
+    .badge {
+      background: #dcfce7;
+      color: #166534;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+    .avatar {
+      width: 32px; height: 32px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 13px; font-weight: 700;
+    }
+
+    .content { padding: 28px; max-width: 900px; }
+
+    /* Page sections */
+    .page { display: none; }
+    .page.active { display: block; }
+
+    h1 { font-size: 22px; font-weight: 700; color: #0f172a; margin-bottom: 6px; }
+    .subtitle { font-size: 13px; color: #64748b; margin-bottom: 28px; }
+
+    /* Cards */
+    .card {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #0f172a;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .card-row:last-child { border-bottom: none; }
+    .card-row-label { font-size: 13px; color: #374151; }
+    .card-row-value { font-size: 13px; color: #6b7280; font-family: monospace; }
+    .btn {
+      padding: 7px 14px;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-primary { background: #1d4ed8; color: #fff; }
+    .btn-primary:hover { background: #1e40af; }
+    .btn-ghost { background: #f1f5f9; color: #374151; }
+    .btn-ghost:hover { background: #e2e8f0; }
+    .btn-danger { background: #fee2e2; color: #dc2626; }
+    .btn-danger:hover { background: #fecaca; }
+
+    /* Form elements */
+    .form-group { margin-bottom: 16px; }
+    label { font-size: 12px; font-weight: 600; color: #374151; display: block; margin-bottom: 5px; }
+    input[type="text"], select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 7px;
+      font-size: 13px;
+      color: #0f172a;
+      background: #fff;
+      outline: none;
+    }
+    input[type="text"]:focus, select:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+    }
+
+    /* Channel list */
+    .channel-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .channel-item:last-child { border-bottom: none; }
+    .channel-icon {
+      width: 36px; height: 36px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .channel-info { flex: 1; }
+    .channel-name { font-size: 13px; font-weight: 600; color: #0f172a; }
+    .channel-desc { font-size: 12px; color: #6b7280; }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-dot.on { background: #22c55e; }
+    .status-dot.off { background: #d1d5db; }
+
+    /* API key masked */
+    .api-key-masked {
+      font-family: monospace;
+      font-size: 13px;
+      color: #6b7280;
+      background: #f8fafc;
+      padding: 6px 10px;
+      border-radius: 5px;
+      border: 1px solid #e2e8f0;
+      display: inline-block;
+    }
+
+    /* Rage click target */
+    .rage-target {
+      background: linear-gradient(135deg, #fef3c7, #fde68a);
+      border: 2px dashed #f59e0b;
+      border-radius: 10px;
+      padding: 20px 24px;
+      text-align: center;
+      margin-bottom: 20px;
+      user-select: none;
+    }
+    .rage-target h3 {
+      font-size: 14px;
+      font-weight: 700;
+      color: #92400e;
+      margin-bottom: 4px;
+    }
+    .rage-target p {
+      font-size: 12px;
+      color: #b45309;
+    }
+    .rage-counter {
+      font-size: 22px;
+      font-weight: 800;
+      color: #d97706;
+      margin-top: 6px;
+    }
+
+    /* Stats */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 16px 18px;
+    }
+    .stat-value { font-size: 26px; font-weight: 800; color: #0f172a; }
+    .stat-label { font-size: 12px; color: #64748b; margin-top: 2px; }
+  </style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">🦞</div>
+    <div>
+      <div class="logo-text">OpenClaw</div>
+      <div class="logo-version">v2026.3.24</div>
+    </div>
+  </div>
+  <nav>
+    <div class="nav-section">Workspace</div>
+    <a class="active" onclick="showPage('overview')"><span class="icon">🏠</span> Overview</a>
+    <a onclick="showPage('channels')"><span class="icon">💬</span> Channels</a>
+    <a onclick="showPage('integrations')"><span class="icon">🔌</span> Integrations</a>
+    <div class="nav-section">Config</div>
+    <a onclick="showPage('skills')"><span class="icon">⚡</span> Skills</a>
+    <a onclick="showPage('settings')"><span class="icon">⚙️</span> Settings</a>
+    <a onclick="showPage('apikeys')"><span class="icon">🔑</span> API Keys</a>
+    <div class="nav-section">Q Demo</div>
+    <a onclick="showPage('demo')"><span class="icon">🤖</span> Trigger Q</a>
+  </nav>
+</div>
+
+<div class="main">
+  <div class="topbar">
+    <div class="topbar-title" id="topbar-title">Overview</div>
+    <div class="topbar-actions">
+      <span class="badge">● Online</span>
+      <div class="avatar">N</div>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- Overview page -->
+    <div class="page active" id="page-overview">
+      <h1>Gateway Overview</h1>
+      <p class="subtitle">Your personal AI assistant gateway status</p>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-value">12</div><div class="stat-label">Active channels</div></div>
+        <div class="stat-card"><div class="stat-value">3.4k</div><div class="stat-label">Messages today</div></div>
+        <div class="stat-card"><div class="stat-value">99.9%</div><div class="stat-label">Uptime</div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">🟢 System Status</div>
+        <div class="card-row"><span class="card-row-label">Gateway</span><span class="card-row-value" style="color:#16a34a">Running on port 4000</span></div>
+        <div class="card-row"><span class="card-row-label">AI Provider</span><span class="card-row-value">Anthropic (claude-sonnet-4-6)</span></div>
+        <div class="card-row"><span class="card-row-label">Memory</span><span class="card-row-value">Convex (connected)</span></div>
+        <div class="card-row"><span class="card-row-label">Last restart</span><span class="card-row-value">2h 14m ago</span></div>
+      </div>
+    </div>
+
+    <!-- Channels page -->
+    <div class="page" id="page-channels">
+      <h1>Channels</h1>
+      <p class="subtitle">Messaging channels your assistant listens on</p>
+      <div class="card">
+        <div class="channel-item">
+          <div class="channel-icon" style="background:#e7f3ff">💬</div>
+          <div class="channel-info"><div class="channel-name">Telegram</div><div class="channel-desc">@my_assistant_bot</div></div>
+          <div class="status-dot on"></div>
+          <button class="btn btn-ghost">Configure</button>
+        </div>
+        <div class="channel-item">
+          <div class="channel-icon" style="background:#f3e8ff">💬</div>
+          <div class="channel-info"><div class="channel-name">Discord</div><div class="channel-desc">#ai-assistant in MyServer</div></div>
+          <div class="status-dot on"></div>
+          <button class="btn btn-ghost">Configure</button>
+        </div>
+        <div class="channel-item">
+          <div class="channel-icon" style="background:#ecfdf5">💬</div>
+          <div class="channel-info"><div class="channel-name">WhatsApp</div><div class="channel-desc">Not connected</div></div>
+          <div class="status-dot off"></div>
+          <button class="btn btn-primary">Connect</button>
+        </div>
+        <div class="channel-item">
+          <div class="channel-icon" style="background:#fff7ed">💬</div>
+          <div class="channel-info"><div class="channel-name">Slack</div><div class="channel-desc">Not connected</div></div>
+          <div class="status-dot off"></div>
+          <button class="btn btn-primary">Connect</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Integrations page -->
+    <div class="page" id="page-integrations">
+      <h1>Integrations</h1>
+      <p class="subtitle">Connect external services and webhooks</p>
+      <div class="card">
+        <div class="card-title">🔗 Webhooks</div>
+        <div class="card-row">
+          <span class="card-row-label">Incoming webhook URL</span>
+          <span class="api-key-masked">https://your-domain.com/webhook/in/••••</span>
+        </div>
+        <div class="card-row">
+          <span class="card-row-label">Outgoing webhook target</span>
+          <button class="btn btn-ghost">Add target</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">⚡ Zapier / n8n</div>
+        <div class="card-row"><span class="card-row-label">Zap trigger token</span><span class="api-key-masked">zpk_••••••••••••••••</span></div>
+        <div class="card-row"><span class="card-row-label">n8n webhook</span><button class="btn btn-primary">Generate URL</button></div>
+      </div>
+    </div>
+
+    <!-- Skills page -->
+    <div class="page" id="page-skills">
+      <h1>Skills</h1>
+      <p class="subtitle">Extend your assistant with custom capabilities</p>
+      <div class="card">
+        <div class="card-title">📦 Installed Skills</div>
+        <div class="card-row"><span class="card-row-label">brave-search</span><span style="font-size:12px;color:#16a34a">Active</span></div>
+        <div class="card-row"><span class="card-row-label">calendar</span><span style="font-size:12px;color:#16a34a">Active</span></div>
+        <div class="card-row"><span class="card-row-label">image-gen</span><span style="font-size:12px;color:#6b7280">Disabled</span></div>
+      </div>
+    </div>
+
+    <!-- Settings page -->
+    <div class="page" id="page-settings">
+      <h1>Settings</h1>
+      <p class="subtitle">Gateway configuration</p>
+      <div class="card">
+        <div class="card-title">🤖 AI Model</div>
+        <div class="form-group">
+          <label>Default model</label>
+          <select>
+            <option selected>claude-sonnet-4-6</option>
+            <option>claude-opus-4-6</option>
+            <option>claude-haiku-4-5</option>
+            <option>gpt-4o</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>System prompt</label>
+          <input type="text" value="You are a helpful personal AI assistant." />
+        </div>
+        <button class="btn btn-primary">Save changes</button>
+      </div>
+      <div class="card">
+        <div class="card-title">🌐 Network</div>
+        <div class="form-group">
+          <label>Gateway port</label>
+          <input type="text" value="4000" />
+        </div>
+        <div class="form-group">
+          <label>Public URL (for webhooks)</label>
+          <input type="text" placeholder="https://your-domain.com" />
+        </div>
+        <button class="btn btn-primary">Save changes</button>
+      </div>
+    </div>
+
+    <!-- API Keys page -->
+    <div class="page" id="page-apikeys">
+      <h1>API Keys</h1>
+      <p class="subtitle">Manage credentials for AI providers and services</p>
+      <div class="card">
+        <div class="card-title">🔑 Provider Keys</div>
+        <div class="card-row">
+          <span class="card-row-label">Anthropic API Key</span>
+          <span class="api-key-masked">sk-ant-api03-••••••••••••••</span>
+          <button class="btn btn-ghost" id="api-key-btn" style="margin-left:8px">Update</button>
+        </div>
+        <div class="card-row">
+          <span class="card-row-label">OpenAI API Key</span>
+          <span class="api-key-masked">sk-••••••••••••</span>
+          <button class="btn btn-ghost" style="margin-left:8px">Update</button>
+        </div>
+        <div class="card-row">
+          <span class="card-row-label">Brave Search API</span>
+          <span style="font-size:12px;color:#6b7280">Not configured</span>
+          <button class="btn btn-primary" style="margin-left:8px">Add key</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Demo trigger page -->
+    <div class="page" id="page-demo">
+      <h1>Q Integration Demo</h1>
+      <p class="subtitle">Trigger OpenTAM's frustration detection manually to test the E2E flow</p>
+
+      <div class="rage-target" id="rage-click-target">
+        <h3>🤬 Rage click me! (non-interactive element)</h3>
+        <p>Click rapidly 3+ times on this area to simulate user frustration</p>
+        <div class="rage-counter" id="click-counter">0 clicks</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🎮 Manual Controls</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">
+          <button class="btn btn-primary" onclick="window.Q && window.Q.simulate()">
+            ⚡ Simulate frustration
+          </button>
+          <button class="btn btn-ghost" onclick="showPage('apikeys')">
+            Go to API Keys page
+          </button>
+          <button class="btn btn-ghost" onclick="showPage('channels')">
+            Go to Channels page
+          </button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">ℹ️ How this works</div>
+        <p style="font-size:13px;color:#475569;line-height:1.6">
+          The Q SDK is loaded on this page. When you rage-click the yellow box above (or click "Simulate frustration"),
+          Q detects the signal, sends it to the backend, which runs a Claude agent with RAG over <strong>695 OpenClaw docs</strong>.
+          The agent picks the best intervention — highlight, deep link, or guided tour — and the Q assistant widget pops up.
+          You can then ask follow-up questions in the chat.
+        </p>
+      </div>
+    </div>
+
+  </div><!-- .content -->
+</div><!-- .main -->
+
+<script>
+// Simple SPA navigation
+const pageTitles = {
+  overview: 'Overview',
+  channels: 'Channels',
+  integrations: 'Integrations',
+  skills: 'Skills',
+  settings: 'Settings',
+  apikeys: 'API Keys',
+  demo: 'Q Integration Demo',
+};
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  const page = document.getElementById('page-' + name);
+  if (page) page.classList.add('active');
+  document.getElementById('topbar-title').textContent = pageTitles[name] || name;
+  const navLinks = document.querySelectorAll('nav a');
+  navLinks.forEach(a => {
+    if (a.getAttribute('onclick') && a.getAttribute('onclick').includes(name)) {
+      a.classList.add('active');
+    }
+  });
+}
+
+// Rage click counter on the demo target
+let clickCount = 0;
+const target = document.getElementById('rage-click-target');
+const counter = document.getElementById('click-counter');
+if (target) {
+  target.addEventListener('click', () => {
+    clickCount++;
+    counter.textContent = clickCount + ' click' + (clickCount === 1 ? '' : 's');
+    if (clickCount >= 3) {
+      counter.style.color = '#dc2626';
+    }
+  });
+}
+</script>
+
+<!-- Q SDK -->
+<script src="/sdk/q.min.js"></script>
+<script>
+  Q.default.init('sdk_test_acme', {
+    backendUrl: 'http://localhost:3001',
+    cooldownHours: 0,
+    thresholds: { rageClicks: 3, dwellSeconds: 120, cursorEntropy: 9 },
+  });
+</script>
+
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "name": "@opentam/mcp",
+  "version": "1.0.0",
+  "description": "OpenTAM MCP server — expose OpenTAM indexing and guidance tools to AI agents",
+  "main": "dist/index.js",
+  "bin": {
+    "opentam-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@opentam/shared": "workspace:*",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  },
+  "license": "AGPL-3.0",
+  "author": "Ning Zou <q.cue.2026@gmail.com>"
+}

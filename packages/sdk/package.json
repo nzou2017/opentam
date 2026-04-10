@@ -1,0 +1,18 @@
+{
+  "name": "@opentam/sdk",
+  "version": "1.0.0",
+  "main": "dist/q.min.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opentam/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  },
+  "license": "AGPL-3.0",
+  "author": "Ning Zou <q.cue.2026@gmail.com>"
+}
