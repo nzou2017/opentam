@@ -9,3 +9,4 @@ dist/
 *.js.map
 chroma_data/
 openclaw_knowledge/
+plans/
