@@ -10,3 +10,9 @@ dist/
 chroma_data/
 openclaw_knowledge/
 plans/
+ADMIN_PORTAL_PLAN.md
+IMPLEMENTATION_PLAN.md
+INITIAL_PLAN.md
+PRODUCTION_PLAN.md
+Q_PROXY_DEMO_TOOL.md
+SaaS_IMPLEMENTATION.md
