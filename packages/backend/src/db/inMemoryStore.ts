@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
-import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord } from './store.js';
+import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense } from './store.js';
 
 class InMemoryStore implements Store {
   _needsAdminHash = false;
@@ -775,6 +775,18 @@ class InMemoryStore implements Store {
 
   async addTelemetryEvent(event: TelemetryEventRecord): Promise<void> {
     this.telemetryEventsList.push(event);
+  }
+
+  // ── Server license (setup wizard) ────────────────────────────────────────
+
+  private serverLicense: ServerLicense | undefined = undefined;
+
+  async getServerLicense(): Promise<ServerLicense | undefined> {
+    return this.serverLicense;
+  }
+
+  async saveServerLicense(data: ServerLicense): Promise<void> {
+    this.serverLicense = data;
   }
 }
 

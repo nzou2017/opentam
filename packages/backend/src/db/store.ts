@@ -3,6 +3,21 @@
 
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, Platform } from '@opentam/shared';
 
+export interface ServerLicense {
+  deploymentId: string;         // stable UUID for this OpenTAM instance
+  ownerName: string;
+  ownerEmail: string;
+  company?: string;
+  plan: 'hobbyist' | 'startup' | 'enterprise';
+  licenseKey: string;           // current Ed25519 JWT
+  refreshToken?: string;        // only for hobbyist/startup
+  refreshTokenExpiresAt?: string;
+  licenseExpiresAt?: string;
+  setupCompleted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TelemetryEventRecord {
   id: string;
   tenantId: string;
@@ -182,6 +197,10 @@ export interface Store {
 
   // ── Telemetry events (mobile SDK) ────────────────────────────────────
   addTelemetryEvent(event: TelemetryEventRecord): Promise<void>;
+
+  // ── Server license (setup wizard) ────────────────────────────────────
+  getServerLicense(): Promise<ServerLicense | undefined>;
+  saveServerLicense(data: ServerLicense): Promise<void>;
 }
 
 export interface TenantSettings {

@@ -20,47 +20,69 @@ export interface LicensePayload {
 let cachedLicense: LicensePayload | null = null;
 let licenseError: string | null = null;
 
-export async function initLicense(): Promise<void> {
-  const token = process.env.Q_LICENSE_KEY;
-  if (!token) {
+async function validateAndCacheLicense(token: string): Promise<void> {
+  const publicKey = await importSPKI(PUBLIC_KEY_PEM, 'EdDSA');
+  const { payload } = await jwtVerify(token, publicKey, {
+    issuer: 'q-license',
+  });
+
+  const features = (payload.features as string[] | undefined) ?? [];
+  const expiresAt = payload.exp
+    ? new Date(payload.exp * 1000).toISOString()
+    : '';
+
+  if (payload.exp && payload.exp * 1000 < Date.now()) {
     cachedLicense = null;
-    licenseError = null;
-    console.log('[license] No Q_LICENSE_KEY set — running in Community mode');
+    licenseError = 'License expired';
+    console.warn('[license] License key is expired');
     return;
   }
 
-  try {
-    const publicKey = await importSPKI(PUBLIC_KEY_PEM, 'EdDSA');
-    const { payload } = await jwtVerify(token, publicKey, {
-      issuer: 'q-license',
-    });
+  cachedLicense = {
+    plan: (payload.plan as string) ?? 'enterprise',
+    features: features as Feature[],
+    expiresAt,
+  };
+  licenseError = null;
+  console.log(
+    `[license] Valid license: plan=${cachedLicense.plan}, features=[${cachedLicense.features.join(',')}], expires=${cachedLicense.expiresAt}`,
+  );
+}
 
-    const features = (payload.features as string[] | undefined) ?? [];
-    const expiresAt = payload.exp
-      ? new Date(payload.exp * 1000).toISOString()
-      : '';
-
-    if (payload.exp && payload.exp * 1000 < Date.now()) {
+export async function initLicense(): Promise<void> {
+  // 1. Try env var (legacy / enterprise set via env)
+  const token = process.env.Q_LICENSE_KEY;
+  if (token) {
+    try {
+      await validateAndCacheLicense(token);
+    } catch (err) {
       cachedLicense = null;
-      licenseError = 'License expired';
-      console.warn('[license] License key is expired');
+      licenseError = err instanceof Error ? err.message : 'Invalid license key';
+      console.warn(`[license] Invalid license key: ${licenseError}`);
+    }
+    return;
+  }
+
+  // 2. Try DB (set via setup wizard)
+  try {
+    const { getStore } = await import('./db/index.js');
+    const store = getStore();
+    const sl = await store.getServerLicense();
+    if (sl?.setupCompleted && sl.licenseKey) {
+      try {
+        await validateAndCacheLicense(sl.licenseKey);
+      } catch (err) {
+        cachedLicense = null;
+        licenseError = err instanceof Error ? err.message : 'Invalid license key';
+        console.warn(`[license] Invalid license key from DB: ${licenseError}`);
+      }
       return;
     }
+  } catch { /* store not ready yet */ }
 
-    cachedLicense = {
-      plan: (payload.plan as string) ?? 'enterprise',
-      features: features as Feature[],
-      expiresAt,
-    };
-    licenseError = null;
-    console.log(
-      `[license] Valid license: plan=${cachedLicense.plan}, features=[${cachedLicense.features.join(',')}], expires=${cachedLicense.expiresAt}`,
-    );
-  } catch (err) {
-    cachedLicense = null;
-    licenseError = err instanceof Error ? err.message : 'Invalid license key';
-    console.warn(`[license] Invalid license key: ${licenseError}`);
-  }
+  cachedLicense = null;
+  licenseError = null;
+  console.log('[license] No license configured — running in Community mode');
 }
 
 export function getLicense(): LicensePayload | null {
@@ -78,34 +100,14 @@ export function isFeatureLicensed(feature: Feature): boolean {
 
 /**
  * Re-validate a license key token (used when activating via API).
- * Returns the parsed payload or throws.
+ * Updates the in-memory cache and returns the parsed payload or throws.
  */
 export async function validateLicenseKey(
   token: string,
 ): Promise<LicensePayload> {
-  const publicKey = await importSPKI(PUBLIC_KEY_PEM, 'EdDSA');
-  const { payload } = await jwtVerify(token, publicKey, {
-    issuer: 'q-license',
-  });
-
-  const features = (payload.features as string[] | undefined) ?? [];
-  const expiresAt = payload.exp
-    ? new Date(payload.exp * 1000).toISOString()
-    : '';
-
-  if (payload.exp && payload.exp * 1000 < Date.now()) {
-    throw new Error('License expired');
+  await validateAndCacheLicense(token);
+  if (!cachedLicense) {
+    throw new Error(licenseError ?? 'Invalid license key');
   }
-
-  const license: LicensePayload = {
-    plan: (payload.plan as string) ?? 'enterprise',
-    features: features as Feature[],
-    expiresAt,
-  };
-
-  // Update cached license
-  cachedLicense = license;
-  licenseError = null;
-
-  return license;
+  return cachedLicense;
 }

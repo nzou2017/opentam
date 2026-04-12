@@ -67,4 +67,8 @@ export const config = {
   // Testing mode: when true, Q admin portal can submit feature requests/bug reports to itself.
   // In production this should be false — end-users don't care about admin portal issues.
   testingMode: process.env.TESTING_MODE === 'true',
+
+  // ── License server ────────────────────────────────────────────────────────
+  licenseServerUrl: process.env.LICENSE_SERVER_URL ?? 'https://license.useq.dev',
+  licenseServerApiKey: process.env.LICENSE_SERVER_API_KEY ?? 'opentam-default-key',
 } as const;

@@ -35,6 +35,8 @@ import { registerAuthHook } from './middleware/auth.js';
 import { initIntegrationBus } from './integrations/bus.js';
 import { seedQAdminDocs } from './seed/seedQAdminDocs.js';
 import { initLicense } from './license.js';
+import { setupRoutes } from './routes/setup.js';
+import { startLicenseRefreshScheduler } from './services/licenseRefresh.js';
 
 async function bootstrap(): Promise<void> {
   const isDev = process.env.NODE_ENV !== 'production';
@@ -55,6 +57,9 @@ async function bootstrap(): Promise<void> {
   // Initialize license verification
   await initLicense();
 
+  // Start background license refresh scheduler
+  startLicenseRefreshScheduler();
+
   // Initialize integration bus
   initIntegrationBus();
 
@@ -65,6 +70,7 @@ async function bootstrap(): Promise<void> {
   registerAuthHook(app);
 
   // Routes
+  await app.register(setupRoutes);
   await app.register(healthRoutes);
   await app.register(authRoutes);
   await app.register(passwordResetRoutes);

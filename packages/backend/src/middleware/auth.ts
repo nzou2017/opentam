@@ -33,6 +33,7 @@ const PUBLIC_PREFIXES = [
   '/api/v1/auth/reset-password',
   '/api/v1/auth/sso/',
   '/api/v1/auth/2fa/validate',
+  '/api/v1/setup',
   '/demo',
   '/sdk/',
 ];

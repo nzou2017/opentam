@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { eq, and, sql, gte, like } from 'drizzle-orm';
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
-import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord } from './store.js';
+import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense } from './store.js';
 import * as schema from './schema.js';
 import { encrypt, decrypt } from '../crypto.js';
 
@@ -307,6 +307,24 @@ export class SqliteStore implements Store {
       );
       CREATE INDEX IF NOT EXISTS idx_telemetry_events_tenant ON telemetry_events(tenant_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_telemetry_events_platform ON telemetry_events(tenant_id, platform);
+    `);
+
+    // Server license table (setup wizard)
+    driver.exec(`
+      CREATE TABLE IF NOT EXISTS server_license (
+        deployment_id TEXT PRIMARY KEY,
+        owner_name TEXT NOT NULL,
+        owner_email TEXT NOT NULL,
+        company TEXT,
+        plan TEXT NOT NULL DEFAULT 'hobbyist',
+        license_key TEXT NOT NULL,
+        refresh_token TEXT,
+        refresh_token_expires_at TEXT,
+        license_expires_at TEXT,
+        setup_completed INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
     `);
   }
 
@@ -1329,5 +1347,51 @@ export class SqliteStore implements Store {
       properties: event.properties ?? null,
       createdAt: event.createdAt,
     });
+  }
+
+  // ── Server license (setup wizard) ────────────────────────────────────────
+
+  async getServerLicense(): Promise<ServerLicense | undefined> {
+    const driver: Database.Database = ((this.db as any).session?.client) ?? ((this.db as any).$client);
+    const row = driver.prepare('SELECT * FROM server_license LIMIT 1').get() as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return {
+      deploymentId: row.deployment_id as string,
+      ownerName: row.owner_name as string,
+      ownerEmail: row.owner_email as string,
+      company: (row.company as string | null) ?? undefined,
+      plan: row.plan as ServerLicense['plan'],
+      licenseKey: row.license_key as string,
+      refreshToken: (row.refresh_token as string | null) ?? undefined,
+      refreshTokenExpiresAt: (row.refresh_token_expires_at as string | null) ?? undefined,
+      licenseExpiresAt: (row.license_expires_at as string | null) ?? undefined,
+      setupCompleted: (row.setup_completed as number) === 1,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+    };
+  }
+
+  async saveServerLicense(data: ServerLicense): Promise<void> {
+    const driver: Database.Database = ((this.db as any).session?.client) ?? ((this.db as any).$client);
+    driver.prepare(`
+      INSERT OR REPLACE INTO server_license (
+        deployment_id, owner_name, owner_email, company, plan,
+        license_key, refresh_token, refresh_token_expires_at,
+        license_expires_at, setup_completed, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.deploymentId,
+      data.ownerName,
+      data.ownerEmail,
+      data.company ?? null,
+      data.plan,
+      data.licenseKey,
+      data.refreshToken ?? null,
+      data.refreshTokenExpiresAt ?? null,
+      data.licenseExpiresAt ?? null,
+      data.setupCompleted ? 1 : 0,
+      data.createdAt,
+      data.updatedAt,
+    );
   }
 }
