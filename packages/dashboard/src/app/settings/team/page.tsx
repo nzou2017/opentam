@@ -9,7 +9,7 @@ import { useState, useEffect } from 'react';
 import { backendConfig } from '@/lib/config';
 import { DataTable } from '@/components/DataTable';
 import type { Column } from '@/components/DataTable';
-import { getLicenseInfo } from '@/lib/api';
+import { getLicenseInfo, apiCreateInviteLink } from '@/lib/api';
 import { UpgradePrompt } from '@/components/UpgradePrompt';
 
 interface TeamUser {
@@ -28,6 +28,15 @@ export default function TeamSettingsPage() {
   const [inviteRole, setInviteRole] = useState<'admin' | 'viewer'>('viewer');
   const [inviting, setInviting] = useState(false);
   const [message, setMessage] = useState('');
+
+  // Invite-by-link — teammate completes their own signup and joins this
+  // tenant, instead of the admin creating the account with a temp password.
+  const [linkEmail, setLinkEmail] = useState('');
+  const [linkRole, setLinkRole] = useState<'admin' | 'viewer'>('viewer');
+  const [generatingLink, setGeneratingLink] = useState(false);
+  const [inviteLink, setInviteLink] = useState('');
+  const [linkError, setLinkError] = useState('');
+  const [linkCopied, setLinkCopied] = useState(false);
 
   async function loadUsers() {
     const token = await getClientToken();
@@ -77,6 +86,30 @@ export default function TeamSettingsPage() {
       }
     } catch { setMessage('Failed to invite'); }
     setInviting(false);
+  }
+
+  async function handleGenerateLink(e: React.FormEvent) {
+    e.preventDefault();
+    setGeneratingLink(true);
+    setLinkError('');
+    setInviteLink('');
+    setLinkCopied(false);
+    try {
+      const token = await getClientToken();
+      const { token: inviteToken } = await apiCreateInviteLink(token, { email: linkEmail, role: linkRole });
+      setInviteLink(`${window.location.origin}/register?invite=${inviteToken}`);
+      setLinkEmail('');
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Failed to generate invite link');
+    }
+    setGeneratingLink(false);
+  }
+
+  async function handleCopyLink() {
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      setLinkCopied(true);
+    } catch { /* clipboard unavailable — link is still shown for manual copy */ }
   }
 
   const [resetMsg, setResetMsg] = useState('');
@@ -193,6 +226,44 @@ export default function TeamSettingsPage() {
           </button>
         </form>
         {message && <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">{message}</p>}
+      </div>
+
+      {/* Invite via link */}
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-6 shadow-sm">
+        <h2 className="mb-1 text-base font-medium text-gray-800 dark:text-gray-200">Invite via Link</h2>
+        <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">
+          Send a link so your teammate can sign up and join this workspace themselves, with their own password.
+        </p>
+        <form onSubmit={handleGenerateLink} className="flex flex-wrap gap-3 items-end">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">Email</label>
+            <input type="email" required value={linkEmail} onChange={e => setLinkEmail(e.target.value)}
+              aria-label="Invite link email" className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">Role</label>
+            <select value={linkRole} onChange={e => setLinkRole(e.target.value as 'admin' | 'viewer')}
+              aria-label="Select invite link role" className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm shadow-sm">
+              <option value="viewer">Viewer</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <button type="submit" disabled={generatingLink}
+            aria-label="Generate invite link" className="rounded-md bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 shadow-sm hover:bg-amber-400 disabled:opacity-50">
+            {generatingLink ? '...' : 'Generate link'}
+          </button>
+        </form>
+        {linkError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{linkError}</p>}
+        {inviteLink && (
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-2">
+            <input readOnly value={inviteLink} aria-label="Invite link"
+              className="flex-1 truncate bg-transparent text-sm text-gray-700 dark:text-gray-300 outline-none" />
+            <button onClick={handleCopyLink} aria-label="Copy invite link"
+              className="shrink-0 rounded-md bg-gray-200 dark:bg-gray-700 px-3 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600">
+              {linkCopied ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
+        )}
       </div>
 
       {resetMsg && (

@@ -39,11 +39,32 @@ const InviteBody = z.object({
   role: z.enum(['admin', 'viewer']).default('viewer'),
 });
 
+const InviteLinkBody = z.object({
+  email: z.string().email(),
+  role: z.enum(['admin', 'viewer']).default('viewer'),
+});
+
+const INVITE_LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 function generateKey(prefix: string): string {
   return `${prefix}_${randomBytes(24).toString('hex')}`;
 }
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
+  // Public — lets the signup form warn "a workspace with this name already
+  // exists, do you want an invite link instead?" before creating a
+  // duplicate, disconnected tenant. Only ever returns a boolean — never
+  // leaks which tenant, its id, members, etc.
+  app.get('/api/v1/auth/check-tenant-name', async (request, reply) => {
+    const { name } = request.query as { name?: string };
+    if (!name || !name.trim()) {
+      return reply.send({ exists: false });
+    }
+    const store = getStore();
+    const tenant = await store.getTenantByName(name.trim());
+    return reply.send({ exists: !!tenant });
+  });
+
   // Register — creates tenant + owner, or joins via invite
   app.post('/api/v1/auth/register', async (request, reply) => {
     const store = getStore();
@@ -52,7 +73,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'Invalid request body', details: parsed.error.format() });
     }
 
-    const { email, password, name, tenantName } = parsed.data;
+    const { email, password, name, tenantName, inviteToken } = parsed.data;
 
     // Check if email already exists
     const existing = await store.getUserByEmail(email);
@@ -60,19 +81,37 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(409).send({ error: 'Email already registered' });
     }
 
+    // Resolve invite (join an existing tenant) before creating anything
+    let invite: Awaited<ReturnType<typeof store.getTeamInviteByTokenHash>> | undefined;
+    if (inviteToken) {
+      invite = await store.getTeamInviteByTokenHash(hashToken(inviteToken));
+      if (!invite || invite.acceptedAt || new Date(invite.expiresAt) < new Date()) {
+        return reply.code(400).send({ error: 'This invite link is invalid or has expired.' });
+      }
+      if (invite.email.toLowerCase() !== email.toLowerCase()) {
+        return reply.code(400).send({ error: 'This invite was issued for a different email address.' });
+      }
+    }
+
     const passwordHash = await hash(password);
     const userId = randomUUID();
     const now = new Date().toISOString();
+    const role: 'owner' | 'admin' | 'viewer' = invite ? invite.role : 'owner';
 
-    // Create new tenant + owner
-    const tenantId = `tenant-${randomUUID().slice(0, 8)}`;
-    await store.createTenant({
-      id: tenantId,
-      name: tenantName ?? `${name}'s Workspace`,
-      sdkKey: generateKey('sdk'),
-      secretKey: generateKey('sk'),
-      plan: 'hobbyist',
-    });
+    let tenantId: string;
+    if (invite) {
+      tenantId = invite.tenantId;
+    } else {
+      // Create new tenant + owner
+      tenantId = `tenant-${randomUUID().slice(0, 8)}`;
+      await store.createTenant({
+        id: tenantId,
+        name: tenantName ?? `${name}'s Workspace`,
+        sdkKey: generateKey('sdk'),
+        secretKey: generateKey('sk'),
+        plan: 'hobbyist',
+      });
+    }
 
     await store.createUser({
       id: userId,
@@ -80,13 +119,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       email,
       passwordHash,
       name,
-      role: 'owner',
+      role,
       createdAt: now,
       updatedAt: now,
     });
 
+    if (invite) {
+      await store.markTeamInviteAccepted(invite.id);
+    }
+
     // Create session
-    const jwt = await createJwt({ userId, tenantId, email, role: 'owner' });
+    const jwt = await createJwt({ userId, tenantId, email, role });
     const sessionId = randomUUID();
     await store.createSession({
       id: sessionId,
@@ -102,7 +145,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       tenantId,
       userId,
       userEmail: email,
-      action: 'user.register',
+      action: invite ? 'user.join_via_invite' : 'user.register',
       resource: 'user',
       resourceId: userId,
       details: { email },
@@ -112,7 +155,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     return reply.code(201).send({
       token: jwt,
-      user: { id: userId, tenantId, email, name, role: 'owner' },
+      user: { id: userId, tenantId, email, name, role },
     });
   });
 
@@ -287,6 +330,64 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       user: { id: userId, email, name, role },
       tempPassword, // In production, send via email instead
     });
+  });
+
+  // Generate a shareable invite link — the invitee completes their own
+  // signup at /register?invite=<token> and joins this tenant instead of
+  // creating a new one. Complements /auth/invite (which creates the
+  // account immediately with a temp password).
+  app.post('/api/v1/auth/invite-link', async (request, reply) => {
+    const req = request as AuthenticatedRequest;
+
+    const tenantId = req.user?.tenantId ?? req.tenant?.id;
+    if (!tenantId) {
+      return reply.code(401).send({ error: 'Authentication required' });
+    }
+    if (req.user && req.user.role === 'viewer') {
+      return reply.code(403).send({ error: 'Admin or owner role required' });
+    }
+
+    const store = getStore();
+    const parsed = InviteLinkBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Invalid request body', details: parsed.error.format() });
+    }
+    const { email, role } = parsed.data;
+
+    const existing = await store.getUserByEmail(email);
+    if (existing) {
+      return reply.code(409).send({ error: 'Email already registered' });
+    }
+
+    const token = randomBytes(24).toString('hex');
+    const expiresAt = new Date(Date.now() + INVITE_LINK_TTL_MS).toISOString();
+
+    await store.createTeamInvite({
+      id: randomUUID(),
+      tenantId,
+      email,
+      role,
+      tokenHash: hashToken(token),
+      invitedBy: req.user?.userId ?? 'secret-key',
+      expiresAt,
+      createdAt: new Date().toISOString(),
+    });
+
+    await logAudit(request, 'user.invite_link_create', 'team_invite', tenantId, { email, role });
+
+    return reply.code(201).send({ token, expiresAt });
+  });
+
+  // Public — lets the register page preview an invite link before signup
+  app.get('/api/v1/auth/invite-preview/:token', async (request, reply) => {
+    const { token } = request.params as { token: string };
+    const store = getStore();
+    const invite = await store.getTeamInviteByTokenHash(hashToken(token));
+    if (!invite || invite.acceptedAt || new Date(invite.expiresAt) < new Date()) {
+      return reply.code(404).send({ error: 'This invite link is invalid or has expired.' });
+    }
+    const tenant = await store.getTenantById(invite.tenantId);
+    return reply.send({ email: invite.email, role: invite.role, tenantName: tenant?.name ?? 'this workspace' });
   });
 
   // Change password (requires current password)

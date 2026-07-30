@@ -56,6 +56,18 @@ export interface AuthSession {
   createdAt: string;
 }
 
+export interface TeamInvite {
+  id: string;
+  tenantId: string;
+  email: string;
+  role: 'admin' | 'viewer';
+  tokenHash: string;
+  invitedBy: string;
+  expiresAt: string;
+  acceptedAt?: string | null;
+  createdAt: string;
+}
+
 export interface Integration {
   id: string;
   tenantId: string;
@@ -94,6 +106,7 @@ export interface Store {
   getTenantBySdkKey(sdkKey: string): Promise<Tenant | undefined>;
   getTenantBySecretKey(secretKey: string): Promise<Tenant | undefined>;
   getTenantById(id: string): Promise<Tenant | undefined>;
+  getTenantByName(name: string): Promise<Tenant | undefined>;
   createTenant(tenant: Tenant): Promise<void>;
   updateTenant(id: string, patch: Partial<Omit<Tenant, 'id'>>): Promise<Tenant | undefined>;
 
@@ -132,6 +145,11 @@ export interface Store {
   getPasswordResetToken(tokenHash: string): Promise<{ userId: string; expiresAt: string } | undefined>;
   deletePasswordResetToken(tokenHash: string): Promise<void>;
   deleteExpiredPasswordResetTokens(): Promise<void>;
+
+  // ── Team invites ─────────────────────────────────────────────────────
+  createTeamInvite(invite: TeamInvite): Promise<void>;
+  getTeamInviteByTokenHash(tokenHash: string): Promise<TeamInvite | undefined>;
+  markTeamInviteAccepted(id: string): Promise<void>;
 
   // ── Usage ────────────────────────────────────────────────────────────
   recordUsage(tenantId: string, type: 'event' | 'chat' | 'crawl' | 'ingest'): Promise<void>;

@@ -27,10 +27,12 @@ export interface AuthenticatedRequest extends FastifyRequest {
 const PUBLIC_PREFIXES = [
   '/health',
   '/api/v1/auth/register',
+  '/api/v1/auth/check-tenant-name',
   '/api/v1/auth/login',
   '/api/v1/auth/logout',
   '/api/v1/auth/forgot-password',
   '/api/v1/auth/reset-password',
+  '/api/v1/auth/invite-preview/',
   '/api/v1/auth/sso/',
   '/api/v1/auth/2fa/validate',
   '/api/v1/setup',

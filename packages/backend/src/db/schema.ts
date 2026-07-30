@@ -61,6 +61,18 @@ export const passwordResetTokens = sqliteTable('password_reset_tokens', {
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
 
+export const teamInvites = sqliteTable('team_invites', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull().references(() => tenants.id),
+  email: text('email').notNull(),
+  role: text('role', { enum: ['admin', 'viewer'] }).notNull().default('viewer'),
+  tokenHash: text('token_hash').notNull().unique(),
+  invitedBy: text('invited_by').notNull(),
+  expiresAt: text('expires_at').notNull(),
+  acceptedAt: text('accepted_at'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
 export const authSessions = sqliteTable('auth_sessions', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id),

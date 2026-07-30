@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
-import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense } from './store.js';
+import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite } from './store.js';
 
 class InMemoryStore implements Store {
   _needsAdminHash = false;
@@ -24,6 +24,7 @@ class InMemoryStore implements Store {
   private featureRequestsMap: Map<string, FeatureRequest> = new Map();
   private featureRequestVotesMap: Map<string, { featureRequestId: string; voterId: string }> = new Map();
   private passwordResetTokensMap: Map<string, { userId: string; expiresAt: string }> = new Map();
+  private teamInvitesMap: Map<string, TeamInvite> = new Map();
   private auditLogsList: AuditLogEntry[] = [];
   private surveysMap: Map<string, SurveyDefinition> = new Map();
   private surveyResponsesList: SurveyResponse[] = [];
@@ -275,6 +276,14 @@ class InMemoryStore implements Store {
 
   async getTenantById(id: string): Promise<Tenant | undefined> {
     return this.tenants.get(id);
+  }
+
+  async getTenantByName(name: string): Promise<Tenant | undefined> {
+    const lower = name.toLowerCase();
+    for (const tenant of this.tenants.values()) {
+      if (tenant.name.toLowerCase() === lower) return tenant;
+    }
+    return undefined;
   }
 
   async createTenant(tenant: Tenant): Promise<void> {
@@ -590,6 +599,25 @@ class InMemoryStore implements Store {
     for (const [hash, entry] of this.passwordResetTokensMap) {
       if (entry.expiresAt < now) {
         this.passwordResetTokensMap.delete(hash);
+      }
+    }
+  }
+
+  // ── Team invites ─────────────────────────────────────────────────
+
+  async createTeamInvite(invite: TeamInvite): Promise<void> {
+    this.teamInvitesMap.set(invite.tokenHash, invite);
+  }
+
+  async getTeamInviteByTokenHash(tokenHash: string): Promise<TeamInvite | undefined> {
+    return this.teamInvitesMap.get(tokenHash);
+  }
+
+  async markTeamInviteAccepted(id: string): Promise<void> {
+    for (const invite of this.teamInvitesMap.values()) {
+      if (invite.id === id) {
+        invite.acceptedAt = new Date().toISOString();
+        break;
       }
     }
   }

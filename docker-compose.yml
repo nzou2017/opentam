@@ -12,6 +12,7 @@ services:
     build:
       context: .
       dockerfile: packages/backend/Dockerfile
+    container_name: backend
     ports:
       - '3001:3001'
     volumes:
@@ -25,11 +26,17 @@ services:
       - PORT=3001
     depends_on:
       - chromadb
+    networks:
+      - default
+      - web
 
   dashboard:
     build:
       context: .
       dockerfile: packages/dashboard/Dockerfile
+      args:
+        - NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL:-https://api.opentam.io}
+    container_name: dashboard
     ports:
       - '3000:3000'
     environment:
@@ -38,6 +45,9 @@ services:
       - Q_SDK_KEY=${Q_SDK_KEY:-sdk_test_acme}
     depends_on:
       - backend
+    networks:
+      - default
+      - web
 
   proxy:
     build:
@@ -55,3 +65,7 @@ services:
 volumes:
   chroma_data:
   q_data:
+
+networks:
+  web:
+    external: true

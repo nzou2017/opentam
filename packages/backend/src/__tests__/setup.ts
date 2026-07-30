@@ -86,7 +86,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 /** Helper to register a user and get a JWT token back */
 export async function registerAndGetToken(
   app: FastifyInstance,
-  overrides?: { email?: string; password?: string; name?: string; plan?: 'hobbyist' | 'startup' | 'enterprise' },
+  overrides?: { email?: string; password?: string; name?: string; tenantName?: string; plan?: 'hobbyist' | 'startup' | 'enterprise' },
 ) {
   const email = overrides?.email ?? `test-${Date.now()}@example.com`;
   const res = await app.inject({
@@ -96,6 +96,7 @@ export async function registerAndGetToken(
       email,
       password: overrides?.password ?? 'TestPass1234!',
       name: overrides?.name ?? 'Test User',
+      tenantName: overrides?.tenantName,
     },
   });
   const body = JSON.parse(res.body);

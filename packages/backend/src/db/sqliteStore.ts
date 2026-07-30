@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { eq, and, sql, gte, like } from 'drizzle-orm';
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
-import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense } from './store.js';
+import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite } from './store.js';
 import * as schema from './schema.js';
 import { encrypt, decrypt } from '../crypto.js';
 
@@ -93,6 +93,18 @@ export class SqliteStore implements Store {
         user_id TEXT NOT NULL REFERENCES users(id),
         token_hash TEXT NOT NULL UNIQUE,
         expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS team_invites (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        email TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'viewer',
+        token_hash TEXT NOT NULL UNIQUE,
+        invited_by TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        accepted_at TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
@@ -346,6 +358,12 @@ export class SqliteStore implements Store {
 
   async getTenantById(id: string): Promise<Tenant | undefined> {
     const row = this.db.select().from(schema.tenants).where(eq(schema.tenants.id, id)).get();
+    return row ? this.toTenant(row) : undefined;
+  }
+
+  async getTenantByName(name: string): Promise<Tenant | undefined> {
+    const row = this.db.select().from(schema.tenants)
+      .where(sql`lower(${schema.tenants.name}) = lower(${name})`).get();
     return row ? this.toTenant(row) : undefined;
   }
 
@@ -650,6 +668,44 @@ export class SqliteStore implements Store {
     const now = new Date().toISOString();
     this.db.delete(schema.passwordResetTokens)
       .where(sql`${schema.passwordResetTokens.expiresAt} < ${now}`).run();
+  }
+
+  // ── Team invites ─────────────────────────────────────────────────────
+
+  async createTeamInvite(invite: TeamInvite): Promise<void> {
+    this.db.insert(schema.teamInvites).values({
+      id: invite.id,
+      tenantId: invite.tenantId,
+      email: invite.email,
+      role: invite.role,
+      tokenHash: invite.tokenHash,
+      invitedBy: invite.invitedBy,
+      expiresAt: invite.expiresAt,
+      acceptedAt: invite.acceptedAt ?? null,
+    }).run();
+  }
+
+  async getTeamInviteByTokenHash(tokenHash: string): Promise<TeamInvite | undefined> {
+    const row = this.db.select().from(schema.teamInvites)
+      .where(eq(schema.teamInvites.tokenHash, tokenHash)).get();
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      tenantId: row.tenantId,
+      email: row.email,
+      role: row.role as TeamInvite['role'],
+      tokenHash: row.tokenHash,
+      invitedBy: row.invitedBy,
+      expiresAt: row.expiresAt,
+      acceptedAt: row.acceptedAt ?? undefined,
+      createdAt: row.createdAt,
+    };
+  }
+
+  async markTeamInviteAccepted(id: string): Promise<void> {
+    this.db.update(schema.teamInvites)
+      .set({ acceptedAt: new Date().toISOString() })
+      .where(eq(schema.teamInvites.id, id)).run();
   }
 
   // ── Usage ────────────────────────────────────────────────────────────

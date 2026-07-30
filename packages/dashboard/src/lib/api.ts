@@ -310,7 +310,7 @@ export async function api2FADisable(token: string, password: string): Promise<{ 
   return res.json() as Promise<{ ok: boolean }>;
 }
 
-export async function apiRegister(data: { email: string; password: string; name: string; tenantName?: string }): Promise<{ token: string; user: any }> {
+export async function apiRegister(data: { email: string; password: string; name: string; tenantName?: string; inviteToken?: string }): Promise<{ token: string; user: any }> {
   const res = await fetch(`${backendUrl}/api/v1/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -321,6 +321,38 @@ export async function apiRegister(data: { email: string; password: string; name:
     throw new Error(body.error ?? `Registration failed: ${res.status}`);
   }
   return res.json() as Promise<{ token: string; user: any }>;
+}
+
+export async function apiCheckTenantName(name: string): Promise<{ exists: boolean }> {
+  const res = await fetch(`${backendUrl}/api/v1/auth/check-tenant-name?name=${encodeURIComponent(name)}`, {
+    cache: 'no-store',
+  });
+  if (!res.ok) return { exists: false };
+  return res.json() as Promise<{ exists: boolean }>;
+}
+
+export async function apiGetInvitePreview(inviteToken: string): Promise<{ email: string; role: string; tenantName: string }> {
+  const res = await fetch(`${backendUrl}/api/v1/auth/invite-preview/${encodeURIComponent(inviteToken)}`, {
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? 'This invite link is invalid or has expired.');
+  }
+  return res.json() as Promise<{ email: string; role: string; tenantName: string }>;
+}
+
+export async function apiCreateInviteLink(token: string, data: { email: string; role: 'admin' | 'viewer' }): Promise<{ token: string; expiresAt: string }> {
+  const res = await fetch(`${backendUrl}/api/v1/auth/invite-link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `Failed to create invite link: ${res.status}`);
+  }
+  return res.json() as Promise<{ token: string; expiresAt: string }>;
 }
 
 export async function apiGetMe(token: string): Promise<{ user: any; tenant: any } | null> {

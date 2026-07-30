@@ -265,8 +265,14 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div className="mt-3 text-right">
-          <Link href="/forgot-password" className="text-sm text-amber-600 hover:text-amber-500">
+        <div className="mt-3 flex items-center justify-between text-sm">
+          <span className="text-gray-500 dark:text-gray-400">
+            New here?{' '}
+            <Link href="/register" className="text-amber-600 hover:text-amber-500">
+              Sign up
+            </Link>
+          </span>
+          <Link href="/forgot-password" className="text-amber-600 hover:text-amber-500">
             Forgot password?
           </Link>
         </div>

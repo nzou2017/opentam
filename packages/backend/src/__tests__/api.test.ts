@@ -145,6 +145,167 @@ describe('Auth', () => {
 });
 
 // ─────────────────────────────────────────────────
+// Check Tenant Name — signup-form duplicate-workspace warning
+// ─────────────────────────────────────────────────
+describe('Check Tenant Name', () => {
+  it('returns exists: false for a name nobody has used', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/check-tenant-name?name=${encodeURIComponent(`Nobody Inc ${Date.now()}`)}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).exists).toBe(false);
+  });
+
+  it('returns exists: true (case-insensitive) once a tenant with that name is registered', async () => {
+    const tenantName = `Ledgrify ${Date.now()}`;
+    await registerAndGetToken(app, { tenantName });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/check-tenant-name?name=${encodeURIComponent(tenantName.toUpperCase())}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).exists).toBe(true);
+  });
+
+  it('does not leak anything beyond the boolean', async () => {
+    const tenantName = `Secretive Co ${Date.now()}`;
+    await registerAndGetToken(app, { tenantName });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/check-tenant-name?name=${encodeURIComponent(tenantName)}`,
+    });
+    expect(Object.keys(JSON.parse(res.body))).toEqual(['exists']);
+  });
+
+  it('returns exists: false for an empty name', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/v1/auth/check-tenant-name?name=' });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).exists).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────
+// Invite Links — shareable link so a teammate can self-register into an
+// existing tenant instead of always creating a new one
+// ─────────────────────────────────────────────────
+describe('Invite Links', () => {
+  it('owner can generate an invite link', async () => {
+    const { token } = await registerAndGetToken(app);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/invite-link',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { email: `teammate-${Date.now()}@example.com`, role: 'viewer' },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body.token).toBeDefined();
+    expect(body.expiresAt).toBeDefined();
+  });
+
+  it('preview returns email/role/tenantName for a valid token', async () => {
+    const { token } = await registerAndGetToken(app, { email: `owner-${Date.now()}@example.com`, tenantName: 'Ledgrify' });
+    const inviteEmail = `teammate-${Date.now()}@example.com`;
+    const linkRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/invite-link',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { email: inviteEmail, role: 'admin' },
+    });
+    const { token: inviteToken } = JSON.parse(linkRes.body);
+
+    const previewRes = await app.inject({ method: 'GET', url: `/api/v1/auth/invite-preview/${inviteToken}` });
+    expect(previewRes.statusCode).toBe(200);
+    const preview = JSON.parse(previewRes.body);
+    expect(preview.email).toBe(inviteEmail);
+    expect(preview.role).toBe('admin');
+    expect(preview.tenantName).toBe('Ledgrify');
+  });
+
+  it('preview 404s for a bogus token', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/v1/auth/invite-preview/not-a-real-token' });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('register with a valid invite token joins the existing tenant instead of creating one', async () => {
+    const { token, tenantId: ownerTenantId } = await registerAndGetToken(app);
+    const inviteEmail = `teammate-${Date.now()}@example.com`;
+    const linkRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/invite-link',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { email: inviteEmail, role: 'viewer' },
+    });
+    const { token: inviteToken } = JSON.parse(linkRes.body);
+
+    const registerRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/register',
+      payload: { email: inviteEmail, password: 'TestPass1234!', name: 'Teammate', inviteToken },
+    });
+    expect(registerRes.statusCode).toBe(201);
+    const body = JSON.parse(registerRes.body);
+    expect(body.user.tenantId).toBe(ownerTenantId);
+    expect(body.user.role).toBe('viewer');
+
+    // Invite is single-use — a second register attempt with the same token must fail
+    const secondRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/register',
+      payload: { email: `other-${Date.now()}@example.com`, password: 'TestPass1234!', name: 'Someone Else', inviteToken },
+    });
+    expect(secondRes.statusCode).toBe(400);
+  });
+
+  it('register rejects an invite token when the email does not match', async () => {
+    const { token } = await registerAndGetToken(app);
+    const linkRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/invite-link',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { email: `intended-${Date.now()}@example.com`, role: 'viewer' },
+    });
+    const { token: inviteToken } = JSON.parse(linkRes.body);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/register',
+      payload: { email: `different-${Date.now()}@example.com`, password: 'TestPass1234!', name: 'Wrong Person', inviteToken },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('viewer cannot generate an invite link', async () => {
+    const { token: ownerToken } = await registerAndGetToken(app, { email: `viewer-owner-${Date.now()}@example.com` });
+    const inviteRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/invite',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { email: `viewer-${Date.now()}@example.com`, name: 'Viewer', role: 'viewer' },
+    });
+    const { tempPassword, user } = JSON.parse(inviteRes.body);
+
+    const loginRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: user.email, password: tempPassword },
+    });
+    const { token: viewerToken } = JSON.parse(loginRes.body);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/invite-link',
+      headers: { authorization: `Bearer ${viewerToken}` },
+      payload: { email: `blocked-${Date.now()}@example.com`, role: 'viewer' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+// ─────────────────────────────────────────────────
 // Functional Map (SDK/Secret key auth)
 // ─────────────────────────────────────────────────
 describe('Map', () => {
