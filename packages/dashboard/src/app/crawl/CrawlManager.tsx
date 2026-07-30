@@ -22,7 +22,13 @@ interface CrawlResponse {
 }
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001';
-const SECRET_KEY = process.env.NEXT_PUBLIC_SECRET_KEY ?? 'sk_test_acme';
+
+async function getAuthToken(): Promise<string> {
+  const res = await fetch('/api/auth/token');
+  if (!res.ok) return process.env.NEXT_PUBLIC_SECRET_KEY ?? '';
+  const { token } = await res.json() as { token: string };
+  return token;
+}
 
 async function postCrawl(
   repoUrl: string,
@@ -34,7 +40,7 @@ async function postCrawl(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${SECRET_KEY}`,
+      Authorization: `Bearer ${await getAuthToken()}`,
     },
     body: JSON.stringify({
       repoUrl,

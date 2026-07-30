@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -12,12 +13,16 @@ export default function KeysSettingsPage() {
   const [regenerating, setRegenerating] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${backendConfig.backendUrl}/api/v1/tenant/keys`, {
-      headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
-    })
-      .then(r => r.json())
-      .then(setKeys)
-      .catch(() => {});
+    async function load() {
+      const token = await getClientToken();
+      fetch(`${backendConfig.backendUrl}/api/v1/tenant/keys`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(r => r.json())
+        .then(setKeys)
+        .catch(() => {});
+    }
+    load();
   }, []);
 
   async function handleRegenerate(keyType: 'sdk' | 'secret') {
@@ -28,7 +33,7 @@ export default function KeysSettingsPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${backendConfig.secretKey}`,
+          Authorization: `Bearer ${await getClientToken()}`,
         },
         body: JSON.stringify({ keyType }),
       });

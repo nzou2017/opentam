@@ -19,8 +19,10 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 async function getUsageSummary(): Promise<{ events: { used: number; limit: number }; chat: { used: number; limit: number }; plan: string } | null> {
   try {
     const { backendConfig } = await import('@/lib/config');
+    const { getServerToken } = await import('@/lib/serverAuth');
+    const token = await getServerToken();
     const res = await fetch(`${backendConfig.backendUrl}/api/v1/tenant/usage`, {
-      headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     });
     if (!res.ok) return null;

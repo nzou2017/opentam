@@ -8,7 +8,9 @@ dist/
 .q-encryption-key
 .DS_Store
 *.js.map
+*.tsbuildinfo
 chroma_data/
+packages/backend/data/
 openclaw_knowledge/
 scripts/ingest-openclaw.sh
 plans/

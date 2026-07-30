@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -19,7 +20,10 @@ export default function SurveysPage() {
   const [error, setError] = useState('');
   const [licensed, setLicensed] = useState<boolean | null>(null);
 
-  const token = typeof window !== 'undefined' ? localStorage.getItem('q_token') : null;
+  const [token, setToken] = useState<string | null>(null);
+  useEffect(() => {
+    getClientToken().then(t => setToken(t || null));
+  }, []);
 
   async function load() {
     if (!token) return;
@@ -40,7 +44,7 @@ export default function SurveysPage() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [token]);
 
   async function handleDelete(id: string) {
     if (!token || !confirm('Delete this survey?')) return;

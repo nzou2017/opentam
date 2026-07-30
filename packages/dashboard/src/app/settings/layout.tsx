@@ -6,11 +6,12 @@ import type { Feature } from '@opentam/shared';
 
 async function fetchLicensedFeatures(): Promise<Feature[] | undefined> {
   try {
+    const { getServerToken } = await import('@/lib/serverAuth');
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? process.env.Q_BACKEND_URL ?? 'http://localhost:3001';
-    const secretKey = process.env.NEXT_PUBLIC_SECRET_KEY ?? process.env.Q_SECRET_KEY ?? '';
-    if (!secretKey) return undefined;
+    const token = await getServerToken();
+    if (!token) return undefined;
     const res = await fetch(`${backendUrl}/api/v1/tenant/license`, {
-      headers: { Authorization: `Bearer ${secretKey}` },
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     });
     if (!res.ok) return undefined;

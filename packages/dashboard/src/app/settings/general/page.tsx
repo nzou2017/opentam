@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -20,16 +21,18 @@ export default function GeneralSettingsPage() {
   const [licenseMsg, setLicenseMsg] = useState('');
 
   useEffect(() => {
-    const token = localStorage.getItem('q_token') ?? backendConfig.secretKey;
-    fetch(`${backendConfig.backendUrl}/api/v1/tenant`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(r => r.json())
-      .then(data => { setTenant(data); setName(data.name ?? ''); })
-      .catch(() => {});
-    if (token) {
-      getLicenseInfo(token).then(setLicenseInfo).catch(() => {});
-    }
+    (async () => {
+      const token = await getClientToken();
+      fetch(`${backendConfig.backendUrl}/api/v1/tenant`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(r => r.json())
+        .then(data => { setTenant(data); setName(data.name ?? ''); })
+        .catch(() => {});
+      if (token) {
+        getLicenseInfo(token).then(setLicenseInfo).catch(() => {});
+      }
+    })();
   }, []);
 
   async function handleSave() {
@@ -40,7 +43,7 @@ export default function GeneralSettingsPage() {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${backendConfig.secretKey}`,
+          Authorization: `Bearer ${await getClientToken()}`,
         },
         body: JSON.stringify({ name }),
       });
@@ -55,7 +58,7 @@ export default function GeneralSettingsPage() {
     setActivating(true);
     setLicenseMsg('');
     try {
-      const token = localStorage.getItem('q_token') ?? backendConfig.secretKey;
+      const token = await getClientToken();
       const result = await activateLicense(token, licenseKey.trim());
       setLicenseInfo(result);
       if (result.licensed) {

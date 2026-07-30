@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -28,9 +29,10 @@ export default function TeamSettingsPage() {
   const [inviting, setInviting] = useState(false);
   const [message, setMessage] = useState('');
 
-  function loadUsers() {
+  async function loadUsers() {
+    const token = await getClientToken();
     fetch(`${backendConfig.backendUrl}/api/v1/tenant/users`, {
-      headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
+      headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.json())
       .then((data: { users?: TeamUser[] }) => setUsers(data.users ?? []))
@@ -38,14 +40,17 @@ export default function TeamSettingsPage() {
   }
 
   useEffect(() => {
-    const token = localStorage.getItem('q_token') ?? backendConfig.secretKey;
-    if (token) {
-      getLicenseInfo(token).then((info) => {
-        setLicensed(info.licensed && info.features.includes('team'));
-      }).catch(() => setLicensed(false));
+    async function init() {
+      const token = await getClientToken();
+      if (token) {
+        getLicenseInfo(token).then((info) => {
+          setLicensed(info.licensed && info.features.includes('team'));
+        }).catch(() => setLicensed(false));
+      }
+      loadUsers();
     }
-    loadUsers();
-  }, []);
+    init();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();
@@ -56,7 +61,7 @@ export default function TeamSettingsPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${backendConfig.secretKey}`,
+          Authorization: `Bearer ${await getClientToken()}`,
         },
         body: JSON.stringify({ email: inviteEmail, name: inviteName, role: inviteRole }),
       });
@@ -80,7 +85,7 @@ export default function TeamSettingsPage() {
     if (!confirm('Remove this user?')) return;
     await fetch(`${backendConfig.backendUrl}/api/v1/tenant/users/${id}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
+      headers: { Authorization: `Bearer ${await getClientToken()}` },
     });
     loadUsers();
   }
@@ -89,7 +94,7 @@ export default function TeamSettingsPage() {
     if (!confirm('Reset this user\'s password? They will need to set a new one on next login.')) return;
     setResetMsg('');
     try {
-      const token = localStorage.getItem('q_token') ?? backendConfig.secretKey;
+      const token = await getClientToken();
       const res = await fetch(`${backendConfig.backendUrl}/api/v1/tenant/users/${id}/reset-password`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -111,7 +116,7 @@ export default function TeamSettingsPage() {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${backendConfig.secretKey}`,
+        Authorization: `Bearer ${await getClientToken()}`,
       },
       body: JSON.stringify({ role }),
     });

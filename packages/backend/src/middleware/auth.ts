@@ -18,7 +18,7 @@ export interface JwtUser {
 }
 
 export interface AuthenticatedRequest extends FastifyRequest {
-  tenant?: { id: string; name: string; plan: string };
+  tenant?: { id: string; name: string; plan: string; licenseExpiresAt?: string };
   user?: JwtUser;
   authMethod?: 'sdk' | 'secret' | 'jwt';
 }
@@ -86,7 +86,7 @@ export function registerAuthHook(app: FastifyInstance): void {
     if (token.startsWith('sdk_')) {
       const tenant = await store.getTenantBySdkKey(token);
       if (tenant) {
-        request.tenant = { id: tenant.id, name: tenant.name, plan: tenant.plan };
+        request.tenant = { id: tenant.id, name: tenant.name, plan: tenant.plan, licenseExpiresAt: tenant.licenseExpiresAt };
         request.authMethod = 'sdk';
       }
       return;
@@ -96,7 +96,7 @@ export function registerAuthHook(app: FastifyInstance): void {
     if (token.startsWith('sk_')) {
       const tenant = await store.getTenantBySecretKey(token);
       if (tenant) {
-        request.tenant = { id: tenant.id, name: tenant.name, plan: tenant.plan };
+        request.tenant = { id: tenant.id, name: tenant.name, plan: tenant.plan, licenseExpiresAt: tenant.licenseExpiresAt };
         request.authMethod = 'secret';
       }
       return;
@@ -116,7 +116,7 @@ export function registerAuthHook(app: FastifyInstance): void {
           // Fill tenant info
           const tenant = await store.getTenantById(user.tenantId);
           if (tenant) {
-            request.tenant = { id: tenant.id, name: tenant.name, plan: tenant.plan };
+            request.tenant = { id: tenant.id, name: tenant.name, plan: tenant.plan, licenseExpiresAt: tenant.licenseExpiresAt };
           }
         }
       }

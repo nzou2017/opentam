@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -14,17 +15,21 @@ export default function UsagePage() {
   const [history, setHistory] = useState<any[]>([]);
 
   useEffect(() => {
-    const headers = { Authorization: `Bearer ${backendConfig.secretKey}` };
+    async function load() {
+      const token = await getClientToken();
+      const headers = { Authorization: `Bearer ${token}` };
 
-    fetch(`${backendConfig.backendUrl}/api/v1/tenant/usage`, { headers })
-      .then(r => r.json())
-      .then(setUsage)
-      .catch(() => {});
+      fetch(`${backendConfig.backendUrl}/api/v1/tenant/usage`, { headers })
+        .then(r => r.json())
+        .then(setUsage)
+        .catch(() => {});
 
-    fetch(`${backendConfig.backendUrl}/api/v1/tenant/usage/history?months=6`, { headers })
-      .then(r => r.json())
-      .then((data: { history?: any[] }) => setHistory(data.history ?? []))
-      .catch(() => {});
+      fetch(`${backendConfig.backendUrl}/api/v1/tenant/usage/history?months=6`, { headers })
+        .then(r => r.json())
+        .then((data: { history?: any[] }) => setHistory(data.history ?? []))
+        .catch(() => {});
+    }
+    load();
   }, []);
 
   return (

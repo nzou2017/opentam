@@ -3,16 +3,10 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { getStore } from '../db/index.js';
 import { config } from '../config.js';
 import { ingestText, ingestUrl } from '../ingestion/pipeline.js';
 import { deleteDoc, listDocs } from '../ingestion/indexer.js';
-
-async function getSecretKeyTenant(authHeader: string | undefined) {
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
-  const secretKey = authHeader.slice('Bearer '.length).trim();
-  return (await getStore().getTenantBySecretKey(secretKey)) ?? null;
-}
+import type { AuthenticatedRequest } from '../middleware/auth.js';
 
 function isRagConfigured(): boolean {
   switch (config.embeddingProvider) {
@@ -34,9 +28,9 @@ const IngestTextBody = z.object({
 
 export async function ingestRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/v1/ingest/url', async (request, reply) => {
-    const tenant = await getSecretKeyTenant(request.headers.authorization);
+    const tenant = (request as AuthenticatedRequest).tenant;
     if (!tenant) {
-      return reply.code(401).send({ error: 'Missing or invalid secret key' });
+      return reply.code(401).send({ error: 'Missing or invalid credentials' });
     }
 
     if (!isRagConfigured()) {
@@ -61,9 +55,9 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/api/v1/ingest/text', async (request, reply) => {
-    const tenant = await getSecretKeyTenant(request.headers.authorization);
+    const tenant = (request as AuthenticatedRequest).tenant;
     if (!tenant) {
-      return reply.code(401).send({ error: 'Missing or invalid secret key' });
+      return reply.code(401).send({ error: 'Missing or invalid credentials' });
     }
 
     if (!isRagConfigured()) {
@@ -88,9 +82,9 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/api/v1/ingest', async (request, reply) => {
-    const tenant = await getSecretKeyTenant(request.headers.authorization);
+    const tenant = (request as AuthenticatedRequest).tenant;
     if (!tenant) {
-      return reply.code(401).send({ error: 'Missing or invalid secret key' });
+      return reply.code(401).send({ error: 'Missing or invalid credentials' });
     }
 
     if (!isRagConfigured()) {
@@ -108,9 +102,9 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.delete('/api/v1/ingest/:docId', async (request, reply) => {
-    const tenant = await getSecretKeyTenant(request.headers.authorization);
+    const tenant = (request as AuthenticatedRequest).tenant;
     if (!tenant) {
-      return reply.code(401).send({ error: 'Missing or invalid secret key' });
+      return reply.code(401).send({ error: 'Missing or invalid credentials' });
     }
 
     if (!isRagConfigured()) {

@@ -7,7 +7,13 @@
 import { useState, useEffect, useRef } from 'react';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001';
-const SECRET_KEY = process.env.NEXT_PUBLIC_SECRET_KEY ?? 'sk_test_acme';
+
+async function getAuthToken(): Promise<string> {
+  const res = await fetch('/api/auth/token');
+  if (!res.ok) return process.env.NEXT_PUBLIC_SECRET_KEY ?? '';
+  const { token } = await res.json() as { token: string };
+  return token;
+}
 
 interface SpiderJob {
   id: string;
@@ -19,14 +25,19 @@ interface SpiderJob {
 
 const SPIDER_JOB_KEY = 'q_spider_job';
 
-function saveJobId(jobId: string) {
-  try { sessionStorage.setItem(SPIDER_JOB_KEY, jobId); } catch {}
+interface SavedJob { jobId: string; maxPages: number }
+
+function saveJob(jobId: string, maxPages: number) {
+  try { localStorage.setItem(SPIDER_JOB_KEY, JSON.stringify({ jobId, maxPages })); } catch {}
 }
-function loadJobId(): string | null {
-  try { return sessionStorage.getItem(SPIDER_JOB_KEY); } catch { return null; }
+function loadJob(): SavedJob | null {
+  try {
+    const raw = localStorage.getItem(SPIDER_JOB_KEY);
+    return raw ? JSON.parse(raw) as SavedJob : null;
+  } catch { return null; }
 }
-function clearJobId() {
-  try { sessionStorage.removeItem(SPIDER_JOB_KEY); } catch {}
+function clearJob() {
+  try { localStorage.removeItem(SPIDER_JOB_KEY); } catch {}
 }
 
 export function SpiderManager() {
@@ -40,39 +51,49 @@ export function SpiderManager() {
 
   // Resume polling if there's an active job from a previous navigation
   useEffect(() => {
-    const savedId = loadJobId();
-    if (savedId) {
+    const saved = loadJob();
+    if (saved) {
       setLoading(true);
-      startPolling(savedId);
+      setMaxPages(saved.maxPages);
+      // Fetch immediately, then start interval
+      resumeJob(saved.jobId);
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  async function resumeJob(jobId: string) {
+    // Immediate fetch so user sees current state right away
+    await pollOnce(jobId);
+    startPolling(jobId);
+  }
+
+  async function pollOnce(jobId: string): Promise<boolean> {
+    try {
+      const pollRes = await fetch(`${BACKEND_URL}/api/v1/spider/${jobId}`, {
+        headers: { Authorization: `Bearer ${await getAuthToken()}` },
+      });
+      if (pollRes.ok) {
+        const data = await pollRes.json() as SpiderJob;
+        setJob(data);
+        if (data.status !== 'running') {
+          if (pollRef.current) clearInterval(pollRef.current);
+          clearJob();
+          setLoading(false);
+          return false; // done
+        }
+      } else if (pollRes.status === 404) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        clearJob();
+        setLoading(false);
+        return false;
+      }
+    } catch { /* keep going */ }
+    return true; // still running
+  }
+
   function startPolling(jobId: string) {
     if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
-      try {
-        const pollRes = await fetch(`${BACKEND_URL}/api/v1/spider/${jobId}`, {
-          headers: { Authorization: `Bearer ${SECRET_KEY}` },
-        });
-        if (pollRes.ok) {
-          const data = await pollRes.json() as SpiderJob;
-          setJob(data);
-          if (data.status !== 'running') {
-            if (pollRef.current) clearInterval(pollRef.current);
-            clearJobId();
-            setLoading(false);
-          }
-        } else if (pollRes.status === 404) {
-          // Job no longer exists
-          if (pollRef.current) clearInterval(pollRef.current);
-          clearJobId();
-          setLoading(false);
-        }
-      } catch {
-        // Network error — keep polling
-      }
-    }, 2000);
+    pollRef.current = setInterval(() => pollOnce(jobId), 2000);
   }
 
   async function handleStart() {
@@ -86,7 +107,7 @@ export function SpiderManager() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${SECRET_KEY}`,
+          Authorization: `Bearer ${await getAuthToken()}`,
         },
         body: JSON.stringify({ rootUrl: rootUrl.trim(), maxPages, maxDepth }),
       });
@@ -97,7 +118,7 @@ export function SpiderManager() {
       }
 
       const { jobId } = await res.json() as { jobId: string };
-      saveJobId(jobId);
+      saveJob(jobId, maxPages);
       startPolling(jobId);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));

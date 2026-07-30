@@ -277,6 +277,10 @@ export class SqliteStore implements Store {
       CREATE INDEX IF NOT EXISTS idx_survey_responses_survey ON survey_responses(survey_id, tenant_id);
     `);
 
+    // Per-tenant enterprise license columns
+    addColumnIfMissing('tenants', 'license_key', 'TEXT');
+    addColumnIfMissing('tenants', 'license_expires_at', 'TEXT');
+
     // Embedding / vector store columns on tenants
     addColumnIfMissing('tenants', 'embedding_provider', 'TEXT');
     addColumnIfMissing('tenants', 'openai_api_key', 'TEXT');
@@ -363,6 +367,8 @@ export class SqliteStore implements Store {
     if (patch.sdkKey !== undefined) values.sdkKey = patch.sdkKey;
     if (patch.secretKey !== undefined) values.secretKey = patch.secretKey;
     if (patch.model !== undefined) values.model = patch.model;
+    if (patch.licenseKey !== undefined) values.licenseKey = patch.licenseKey;
+    if (patch.licenseExpiresAt !== undefined) values.licenseExpiresAt = patch.licenseExpiresAt;
 
     this.db.update(schema.tenants).set(values).where(eq(schema.tenants.id, id)).run();
     return this.getTenantById(id);
@@ -376,6 +382,8 @@ export class SqliteStore implements Store {
       secretKey: row.secretKey,
       plan: row.plan as Tenant['plan'],
       model: row.model ?? undefined,
+      licenseKey: row.licenseKey ?? undefined,
+      licenseExpiresAt: row.licenseExpiresAt ?? undefined,
     };
   }
 

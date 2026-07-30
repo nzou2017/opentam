@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -17,7 +18,10 @@ const AMBER_COLORS = ['#f59e0b', '#d97706', '#b45309', '#92400e', '#78350f'];
 export default function SurveyResultsPage() {
   const params = useParams();
   const id = params.id as string;
-  const token = typeof window !== 'undefined' ? localStorage.getItem('q_token') : null;
+  const [token, setToken] = useState<string | null>(null);
+  useEffect(() => {
+    getClientToken().then(t => setToken(t || null));
+  }, []);
   const [licensed, setLicensed] = useState<boolean | null>(null);
 
   const [survey, setSurvey] = useState<SurveyDefinition | null>(null);

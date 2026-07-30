@@ -10,6 +10,9 @@ export const tenants = sqliteTable('tenants', {
   secretKey: text('secret_key').notNull().unique(),
   plan: text('plan', { enum: ['hobbyist', 'startup', 'enterprise'] }).notNull().default('hobbyist'),
   model: text('model'),
+  // Per-tenant enterprise license (activated manually via Settings > General > License)
+  licenseKey: text('license_key'),
+  licenseExpiresAt: text('license_expires_at'),
   // Per-tenant LLM config
   llmProvider: text('llm_provider'),
   llmApiKey: text('llm_api_key'),

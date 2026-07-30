@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -30,31 +31,35 @@ export default function ModelSettingsPage() {
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    fetch(`${backendConfig.backendUrl}/api/v1/tenant/settings`, {
-      headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
-    })
-      .then(r => r.json())
-      .then(data => {
-        setSettings(data);
-        setForm({
-          llmProvider: data.llmProvider ?? '',
-          llmApiKey: '',
-          llmBaseUrl: data.llmBaseUrl ?? '',
-          llmModel: data.llmModel ?? '',
-          sttBaseUrl: data.sttBaseUrl ?? '',
-          sttApiKey: '',
-          sttModel: data.sttModel ?? '',
-          sttPath: data.sttPath ?? '',
-          embeddingProvider: data.embeddingProvider ?? '',
-          openaiApiKey: '',
-          ollamaUrl: data.ollamaUrl ?? '',
-          ollamaEmbeddingModel: data.ollamaEmbeddingModel ?? '',
-          chromaUrl: data.chromaUrl ?? '',
-          chromaCollection: data.chromaCollection ?? '',
-          embeddingDimensions: data.embeddingDimensions?.toString() ?? '',
-        });
+    async function load() {
+      const token = await getClientToken();
+      fetch(`${backendConfig.backendUrl}/api/v1/tenant/settings`, {
+        headers: { Authorization: `Bearer ${token}` },
       })
-      .catch(() => {});
+        .then(r => r.json())
+        .then(data => {
+          setSettings(data);
+          setForm({
+            llmProvider: data.llmProvider ?? '',
+            llmApiKey: '',
+            llmBaseUrl: data.llmBaseUrl ?? '',
+            llmModel: data.llmModel ?? '',
+            sttBaseUrl: data.sttBaseUrl ?? '',
+            sttApiKey: '',
+            sttModel: data.sttModel ?? '',
+            sttPath: data.sttPath ?? '',
+            embeddingProvider: data.embeddingProvider ?? '',
+            openaiApiKey: '',
+            ollamaUrl: data.ollamaUrl ?? '',
+            ollamaEmbeddingModel: data.ollamaEmbeddingModel ?? '',
+            chromaUrl: data.chromaUrl ?? '',
+            chromaCollection: data.chromaCollection ?? '',
+            embeddingDimensions: data.embeddingDimensions?.toString() ?? '',
+          });
+        })
+        .catch(() => {});
+    }
+    load();
   }, []);
 
   async function handleSave() {
@@ -82,7 +87,7 @@ export default function ModelSettingsPage() {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${backendConfig.secretKey}`,
+          Authorization: `Bearer ${await getClientToken()}`,
         },
         body: JSON.stringify(body),
       });

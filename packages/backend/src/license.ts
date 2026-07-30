@@ -4,10 +4,19 @@
 import { importSPKI, jwtVerify } from 'jose';
 import type { Feature } from '@opentam/shared';
 
-// Ed25519 public key for license verification (can verify but not forge)
-const PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
+// Ed25519 public key for license verification (can verify but not forge).
+// Override via LICENSE_PUBLIC_KEY env var (full PEM string, or just the base64 body).
+const DEFAULT_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEA3C65h8OryVxcEy1iM7+e1NW6QMG2N7zskaxphNIEyOU=
 -----END PUBLIC KEY-----`;
+
+function getPublicKeyPem(): string {
+  const env = process.env.LICENSE_PUBLIC_KEY?.trim();
+  if (!env) return DEFAULT_PUBLIC_KEY_PEM;
+  if (env.startsWith('-----')) return env;
+  // bare base64 body — wrap it
+  return `-----BEGIN PUBLIC KEY-----\n${env}\n-----END PUBLIC KEY-----`;
+}
 
 export interface LicensePayload {
   plan: string;
@@ -20,8 +29,14 @@ export interface LicensePayload {
 let cachedLicense: LicensePayload | null = null;
 let licenseError: string | null = null;
 
-async function validateAndCacheLicense(token: string): Promise<void> {
-  const publicKey = await importSPKI(PUBLIC_KEY_PEM, 'EdDSA');
+/**
+ * Verify a license key's signature and expiry. Does not touch any cache —
+ * safe to call for per-tenant license checks in multi-tenant SaaS mode,
+ * where the deployment-wide `cachedLicense` below must not be mutated by
+ * a single tenant's key.
+ */
+async function verifyLicenseToken(token: string): Promise<LicensePayload> {
+  const publicKey = await importSPKI(getPublicKeyPem(), 'EdDSA');
   const { payload } = await jwtVerify(token, publicKey, {
     issuer: 'q-license',
   });
@@ -32,21 +47,38 @@ async function validateAndCacheLicense(token: string): Promise<void> {
     : '';
 
   if (payload.exp && payload.exp * 1000 < Date.now()) {
-    cachedLicense = null;
-    licenseError = 'License expired';
-    console.warn('[license] License key is expired');
-    return;
+    throw new Error('License expired');
   }
 
-  cachedLicense = {
+  return {
     plan: (payload.plan as string) ?? 'enterprise',
     features: features as Feature[],
     expiresAt,
   };
-  licenseError = null;
-  console.log(
-    `[license] Valid license: plan=${cachedLicense.plan}, features=[${cachedLicense.features.join(',')}], expires=${cachedLicense.expiresAt}`,
-  );
+}
+
+async function validateAndCacheLicense(token: string): Promise<void> {
+  try {
+    cachedLicense = await verifyLicenseToken(token);
+    licenseError = null;
+    console.log(
+      `[license] Valid license: plan=${cachedLicense.plan}, features=[${cachedLicense.features.join(',')}], expires=${cachedLicense.expiresAt}`,
+    );
+  } catch (err) {
+    cachedLicense = null;
+    licenseError = err instanceof Error ? err.message : 'Invalid license key';
+    console.warn(`[license] ${licenseError}`);
+  }
+}
+
+/**
+ * Verify a license key for a single tenant, independent of the
+ * deployment-wide license cache. Use this — never `validateLicenseKey` —
+ * when activating a license on a specific tenant in multi-tenant SaaS mode,
+ * so one customer's key can't leak Enterprise access to every other tenant.
+ */
+export async function verifyTenantLicenseKey(token: string): Promise<LicensePayload> {
+  return verifyLicenseToken(token);
 }
 
 export async function initLicense(): Promise<void> {

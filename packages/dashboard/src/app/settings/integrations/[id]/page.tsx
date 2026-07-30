@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -19,9 +20,9 @@ export default function EditIntegrationPage() {
   const [saving, setSaving] = useState(false);
   const [newEventType, setNewEventType] = useState('frustration_high');
 
-  function load() {
+  async function load() {
     fetch(`${backendConfig.backendUrl}/api/v1/tenant/integrations/${id}`, {
-      headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
+      headers: { Authorization: `Bearer ${await getClientToken()}` },
     })
       .then(r => r.json())
       .then(data => {
@@ -40,7 +41,7 @@ export default function EditIntegrationPage() {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${backendConfig.secretKey}`,
+        Authorization: `Bearer ${await getClientToken()}`,
       },
       body: JSON.stringify({ name }),
     });
@@ -51,7 +52,7 @@ export default function EditIntegrationPage() {
   async function handleTest() {
     const res = await fetch(`${backendConfig.backendUrl}/api/v1/tenant/integrations/${id}/test`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
+      headers: { Authorization: `Bearer ${await getClientToken()}` },
     });
     const result = await res.json() as { ok: boolean; error?: string };
     alert(result.ok ? 'Test notification sent!' : `Failed: ${result.error}`);
@@ -62,7 +63,7 @@ export default function EditIntegrationPage() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${backendConfig.secretKey}`,
+        Authorization: `Bearer ${await getClientToken()}`,
       },
       body: JSON.stringify({ eventType: newEventType }),
     });
@@ -72,7 +73,7 @@ export default function EditIntegrationPage() {
   async function deleteTrigger(triggerId: string) {
     await fetch(`${backendConfig.backendUrl}/api/v1/tenant/integrations/${id}/triggers/${triggerId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
+      headers: { Authorization: `Bearer ${await getClientToken()}` },
     });
     load();
   }

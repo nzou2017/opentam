@@ -1,12 +1,16 @@
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { cookies } from 'next/headers';
 import { backendConfig } from '@/lib/config';
 import DocsManager from './DocsManager';
 
 export const dynamic = 'force-dynamic';
 
-export default function DocsPage() {
+export default async function DocsPage() {
+  const cookieStore = await cookies();
+  const token = cookieStore.get('q_token')?.value ?? backendConfig.secretKey;
+
   return (
     <div className="flex flex-col gap-6 p-8">
       <div>
@@ -19,7 +23,7 @@ export default function DocsPage() {
       </div>
       <DocsManager
         backendUrl={backendConfig.backendUrl}
-        secretKey={backendConfig.secretKey}
+        secretKey={token}
       />
     </div>
   );

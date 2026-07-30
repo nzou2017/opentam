@@ -785,7 +785,7 @@ describe('Tenant', () => {
   });
 
   it('GET /api/v1/tenant/users — lists users', async () => {
-    const { token } = await registerAndGetToken(app);
+    const { token } = await registerAndGetToken(app, { plan: 'startup' });
     const res = await app.inject({
       method: 'GET',
       url: '/api/v1/tenant/users',
@@ -1785,7 +1785,7 @@ describe('Profile', () => {
 // ─────────────────────────────────────────────────
 describe('Reset User Password', () => {
   it('POST /api/v1/tenant/users/:id/reset-password — admin can reset viewer password', async () => {
-    const { token: ownerToken } = await registerAndGetToken(app, { email: `reset-owner-${Date.now()}@example.com` });
+    const { token: ownerToken } = await registerAndGetToken(app, { email: `reset-owner-${Date.now()}@example.com`, plan: 'startup' });
     // Invite a viewer
     const invRes = await app.inject({
       method: 'POST',
@@ -1937,7 +1937,7 @@ describe('Surveys', () => {
   let adminToken: string;
 
   beforeAll(async () => {
-    const { token } = await registerAndGetToken(app, { email: `survey-admin-${Date.now()}@example.com` });
+    const { token } = await registerAndGetToken(app, { email: `survey-admin-${Date.now()}@example.com`, plan: 'startup' });
     adminToken = token;
   });
 

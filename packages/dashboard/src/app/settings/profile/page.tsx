@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -37,16 +38,18 @@ export default function ProfilePage() {
   const [changingPw, setChangingPw] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem('q_token');
-    if (!token) return;
-    apiGetMe(token).then((data) => {
-      if (data?.user) {
-        setName(data.user.name ?? '');
-        setEmail(data.user.email ?? '');
-        setAvatar(data.user.avatar ?? null);
-        setRole(data.user.role ?? '');
-      }
-    });
+    (async () => {
+      const token = await getClientToken();
+      if (!token) return;
+      apiGetMe(token).then((data) => {
+        if (data?.user) {
+          setName(data.user.name ?? '');
+          setEmail(data.user.email ?? '');
+          setAvatar(data.user.avatar ?? null);
+          setRole(data.user.role ?? '');
+        }
+      });
+    })();
   }, []);
 
   async function handleSave(e: React.FormEvent) {
@@ -54,7 +57,7 @@ export default function ProfilePage() {
     setSaving(true);
     setMessage('');
     setError('');
-    const token = localStorage.getItem('q_token');
+    const token = await getClientToken();
     if (!token) return;
     try {
       const result = await apiUpdateProfile(token, { name, email, avatar });
@@ -81,7 +84,7 @@ export default function ProfilePage() {
       return;
     }
     setChangingPw(true);
-    const token = localStorage.getItem('q_token');
+    const token = await getClientToken();
     if (!token) return;
     try {
       await apiChangePassword(currentPassword, newPassword, token);

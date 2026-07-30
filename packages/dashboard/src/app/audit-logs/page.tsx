@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -94,7 +95,7 @@ export default function AuditLogsPage() {
   const limit = 20;
 
   const fetchLogs = useCallback(async () => {
-    const token = localStorage.getItem('q_token');
+    const token = await getClientToken();
     if (!token) return;
     setLoading(true);
     try {

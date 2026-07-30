@@ -8,7 +8,7 @@ import { useRouter } from 'next/navigation';
 import { backendConfig } from '@/lib/config';
 
 type Plan = 'hobbyist' | 'startup' | 'enterprise';
-type Step = 'plan' | 'contact' | 'confirm';
+type Step = 'plan' | 'contact' | 'admin' | 'confirm';
 
 interface PlanInfo {
   id: Plan;
@@ -72,6 +72,12 @@ export default function SetupPage() {
   const [company, setCompany] = useState('');
   const [licenseKey, setLicenseKey] = useState('');
 
+  // Admin account
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminConfirmPassword, setAdminConfirmPassword] = useState('');
+  const [adminName, setAdminName] = useState('');
+
   // Submit state
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -102,6 +108,9 @@ export default function SetupPage() {
         ownerName: ownerName.trim(),
         ownerEmail: ownerEmail.trim(),
         plan: selectedPlan,
+        adminEmail: adminEmail.trim(),
+        adminPassword,
+        adminName: adminName.trim(),
       };
       if (company.trim()) body.company = company.trim();
       if (selectedPlan === 'enterprise') body.licenseKey = licenseKey.trim();
@@ -184,21 +193,21 @@ export default function SetupPage() {
 
         {/* Step indicator */}
         <div className="mb-8 flex items-center justify-center gap-2">
-          {(['plan', 'contact', 'confirm'] as Step[]).map((s, i) => (
+          {(['plan', 'contact', 'admin', 'confirm'] as Step[]).map((s, i) => (
             <div key={s} className="flex items-center gap-2">
               <div
                 className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition ${
                   step === s
                     ? 'bg-amber-500 text-gray-900'
-                    : i < (['plan', 'contact', 'confirm'] as Step[]).indexOf(step)
+                    : i < (['plan', 'contact', 'admin', 'confirm'] as Step[]).indexOf(step)
                     ? 'bg-amber-500/30 text-amber-600 dark:text-amber-400'
                     : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
                 }`}
               >
                 {i + 1}
               </div>
-              {i < 2 && (
-                <div className={`h-px w-10 ${i < (['plan', 'contact', 'confirm'] as Step[]).indexOf(step) ? 'bg-amber-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+              {i < 3 && (
+                <div className={`h-px w-10 ${i < (['plan', 'contact', 'admin', 'confirm'] as Step[]).indexOf(step) ? 'bg-amber-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
               )}
             </div>
           ))}
@@ -335,12 +344,102 @@ export default function SetupPage() {
                   onClick={() => {
                     if (!ownerName.trim() || !ownerEmail.trim()) return;
                     if (selectedPlan === 'enterprise' && !licenseKey.trim()) return;
-                    setStep('confirm');
+                    setStep('admin');
                   }}
                   disabled={
                     !ownerName.trim() ||
                     !ownerEmail.trim() ||
                     (selectedPlan === 'enterprise' && !licenseKey.trim())
+                  }
+                  className="rounded-lg bg-amber-500 px-6 py-2.5 font-semibold text-gray-900 transition hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step 3: Admin account ── */}
+          {step === 'admin' && (
+            <div>
+              <h2 className="mb-1 text-xl font-bold text-gray-900 dark:text-gray-100">Create admin account</h2>
+              <p className="mb-6 text-sm text-gray-500 dark:text-gray-400">
+                This is your login credential for the dashboard.
+              </p>
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={adminName}
+                    onChange={(e) => setAdminName(e.target.value)}
+                    placeholder="Jane Smith"
+                    className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Email <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={adminEmail}
+                    onChange={(e) => setAdminEmail(e.target.value)}
+                    placeholder="admin@example.com"
+                    className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Password <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    placeholder="Min 12 chars, upper, lower, number, special"
+                    className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Confirm password <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={adminConfirmPassword}
+                    onChange={(e) => setAdminConfirmPassword(e.target.value)}
+                    placeholder="Re-enter password"
+                    className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                  {adminConfirmPassword && adminPassword !== adminConfirmPassword && (
+                    <p className="mt-1 text-xs text-red-500">Passwords do not match</p>
+                  )}
+                </div>
+              </div>
+              <div className="mt-6 flex justify-between">
+                <button
+                  onClick={() => setStep('contact')}
+                  className="rounded-lg border border-gray-300 dark:border-gray-600 px-6 py-2.5 text-sm font-semibold text-gray-700 dark:text-gray-300 transition hover:bg-gray-50 dark:hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={() => {
+                    if (!adminName.trim() || !adminEmail.trim() || !adminPassword || adminPassword !== adminConfirmPassword) return;
+                    setStep('confirm');
+                  }}
+                  disabled={
+                    !adminName.trim() ||
+                    !adminEmail.trim() ||
+                    !adminPassword ||
+                    adminPassword !== adminConfirmPassword
                   }
                   className="rounded-lg bg-amber-500 px-6 py-2.5 font-semibold text-gray-900 transition hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -350,7 +449,7 @@ export default function SetupPage() {
             </div>
           )}
 
-          {/* ── Step 3: Confirm ── */}
+          {/* ── Step 4: Confirm ── */}
           {step === 'confirm' && (
             <div>
               <h2 className="mb-1 text-xl font-bold text-gray-900 dark:text-gray-100">Confirm &amp; activate</h2>
@@ -385,6 +484,10 @@ export default function SetupPage() {
                     </dd>
                   </div>
                 )}
+                <div className="flex items-center justify-between px-4 py-3">
+                  <dt className="font-medium text-gray-500 dark:text-gray-400">Admin account</dt>
+                  <dd className="text-gray-900 dark:text-gray-100">{adminEmail}</dd>
+                </div>
               </dl>
 
               {error && (
@@ -395,7 +498,7 @@ export default function SetupPage() {
 
               <div className="flex justify-between">
                 <button
-                  onClick={() => { setError(''); setStep('contact'); }}
+                  onClick={() => { setError(''); setStep('admin'); }}
                   disabled={loading}
                   className="rounded-lg border border-gray-300 dark:border-gray-600 px-6 py-2.5 text-sm font-semibold text-gray-700 dark:text-gray-300 transition hover:bg-gray-50 dark:hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 disabled:opacity-50"
                 >

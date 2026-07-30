@@ -10,7 +10,10 @@ import type { AuthenticatedRequest } from '../middleware/auth.js';
 import { requireRole } from '../middleware/rbac.js';
 import { logAudit } from '../middleware/audit.js';
 import { requirePlan } from '../middleware/planGate.js';
-import { getLicense, getLicenseError, validateLicenseKey } from '../license.js';
+import { verifyTenantLicenseKey } from '../license.js';
+import { hasFeature, type Feature } from '@opentam/shared';
+
+const ALL_FEATURES: Feature[] = ['sso', 'team', 'surveys', 'feature_requests'];
 
 function maskKey(key: string): string {
   if (key.length <= 8) return '****';
@@ -94,48 +97,65 @@ export async function tenantRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ keyType: body.data.keyType, key: newKey });
   });
 
-  // ── License info endpoint ──────────────────────────────────────────────────
+  // ── License info endpoint (per-tenant) ──────────────────────────────────────
   app.get('/api/v1/tenant/license', { preHandler: [requireRole('viewer')] }, async (request, reply) => {
-    const license = getLicense();
-    const error = getLicenseError();
-    if (license) {
-      return reply.send({
-        licensed: true,
-        plan: license.plan,
-        features: license.features,
-        expiresAt: license.expiresAt,
-        error: null,
-      });
-    }
+    const req = request as AuthenticatedRequest;
+    const store = getStore();
+    const tenantId = req.tenant?.id ?? req.user?.tenantId;
+    if (!tenantId) return reply.code(401).send({ error: 'Authentication required' });
+
+    const tenant = await store.getTenantById(tenantId);
+    if (!tenant) return reply.code(404).send({ error: 'Tenant not found' });
+
+    const expired = tenant.plan === 'enterprise' && !!tenant.licenseExpiresAt && new Date(tenant.licenseExpiresAt) < new Date();
+    const effectivePlan = expired ? 'hobbyist' : tenant.plan;
+
     return reply.send({
-      licensed: false,
-      plan: 'community',
-      features: [],
-      expiresAt: null,
-      error,
+      licensed: effectivePlan === 'enterprise',
+      plan: effectivePlan,
+      features: ALL_FEATURES.filter(f => hasFeature(effectivePlan, f)),
+      expiresAt: tenant.licenseExpiresAt ?? null,
+      error: expired ? 'License expired' : null,
     });
   });
 
-  // Activate / update license key
+  // Activate a license key for THIS tenant only — never touches the
+  // deployment-wide license cache, so one tenant's key can't grant
+  // Enterprise access to other tenants sharing this instance.
   app.put('/api/v1/tenant/license', { preHandler: [requireRole('admin')] }, async (request, reply) => {
+    const req = request as AuthenticatedRequest;
+    const store = getStore();
+    const tenantId = req.tenant?.id ?? req.user?.tenantId;
+    if (!tenantId) return reply.code(401).send({ error: 'Authentication required' });
+
     const body = z.object({ licenseKey: z.string().min(1) }).safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: 'licenseKey is required' });
 
+    let license;
     try {
-      const license = await validateLicenseKey(body.data.licenseKey);
-      return reply.send({
-        licensed: true,
-        plan: license.plan,
-        features: license.features,
-        expiresAt: license.expiresAt,
-        error: null,
-      });
+      license = await verifyTenantLicenseKey(body.data.licenseKey);
     } catch (err) {
       return reply.code(400).send({
         licensed: false,
         error: err instanceof Error ? err.message : 'Invalid license key',
       });
     }
+
+    await store.updateTenant(tenantId, {
+      plan: (license.plan as 'hobbyist' | 'startup' | 'enterprise') ?? 'enterprise',
+      licenseKey: body.data.licenseKey,
+      licenseExpiresAt: license.expiresAt,
+    });
+
+    await logAudit(request, 'tenant.license_activate', 'tenant', tenantId, { plan: license.plan, expiresAt: license.expiresAt });
+
+    return reply.send({
+      licensed: true,
+      plan: license.plan,
+      features: license.features,
+      expiresAt: license.expiresAt,
+      error: null,
+    });
   });
 
   // List users

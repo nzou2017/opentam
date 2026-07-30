@@ -1,13 +1,16 @@
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { hash } from '@node-rs/argon2';
 import { getStore } from '../db/index.js';
 import { config } from '../config.js';
 import { validateLicenseKey } from '../license.js';
+import { createJwt, hashToken } from '../middleware/auth.js';
 import type { ServerLicense } from '../db/store.js';
+import { isPasswordValid } from '@opentam/shared';
 
 const PLAN_FEATURES: Record<string, string[]> = {
   hobbyist: ['frustration_detection', 'overlay_hints', 'basic_analytics'],
@@ -15,12 +18,22 @@ const PLAN_FEATURES: Record<string, string[]> = {
   enterprise: ['frustration_detection', 'overlay_hints', 'advanced_analytics', 'surveys', 'team_access', 'sso', 'audit_logs', 'custom_branding'],
 };
 
+function generateKey(prefix: string): string {
+  return `${prefix}_${randomBytes(24).toString('hex')}`;
+}
+
 const SetupBodySchema = z.object({
   ownerName: z.string().min(1),
   ownerEmail: z.string().email(),
   company: z.string().optional(),
   plan: z.enum(['hobbyist', 'startup', 'enterprise']),
   licenseKey: z.string().optional(),
+  // First admin account
+  adminEmail: z.string().email(),
+  adminPassword: z.string().refine(isPasswordValid, {
+    message: 'Password must be at least 12 characters with uppercase, lowercase, number, and special character',
+  }),
+  adminName: z.string().min(1),
 });
 
 export async function setupRoutes(app: FastifyInstance): Promise<void> {
@@ -47,7 +60,47 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: parseResult.error.issues.map(i => i.message).join(', ') });
     }
 
-    const { ownerName, ownerEmail, company, plan, licenseKey } = parseResult.data;
+    const { ownerName, ownerEmail, company, plan, licenseKey, adminEmail, adminPassword, adminName } = parseResult.data;
+
+    // Helper: create the first tenant + admin user, return session token
+    async function createAdminAccount(): Promise<{ token: string; tenantId: string; sdkKey: string; secretKey: string }> {
+      const existingUser = await store.getUserByEmail(adminEmail);
+      if (existingUser) {
+        throw new Error('An account with that email already exists');
+      }
+      const tenantId = `tenant-${randomUUID().slice(0, 8)}`;
+      const sdkKey = generateKey('sdk');
+      const secretKey = generateKey('sk');
+      await store.createTenant({
+        id: tenantId,
+        name: company ?? `${adminName}'s Workspace`,
+        sdkKey,
+        secretKey,
+        plan,
+      });
+      const userId = randomUUID();
+      const now = new Date().toISOString();
+      const passwordHash = await hash(adminPassword);
+      await store.createUser({
+        id: userId,
+        tenantId,
+        email: adminEmail,
+        passwordHash,
+        name: adminName,
+        role: 'owner',
+        createdAt: now,
+        updatedAt: now,
+      });
+      const jwt = await createJwt({ userId, tenantId, email: adminEmail, role: 'owner' });
+      await store.createSession({
+        id: randomUUID(),
+        userId,
+        tokenHash: hashToken(jwt),
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        createdAt: now,
+      });
+      return { token: jwt, tenantId, sdkKey, secretKey };
+    }
     const deploymentId = randomUUID();
     const now = new Date().toISOString();
 
@@ -108,11 +161,20 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
       };
       await store.saveServerLicense(sl);
 
+      let adminResult;
+      try {
+        adminResult = await createAdminAccount();
+      } catch (err) {
+        return reply.code(400).send({ error: err instanceof Error ? err.message : 'Failed to create admin account' });
+      }
+
       return reply.send({
         success: true,
         plan,
         features: PLAN_FEATURES[plan] ?? [],
         expiresAt: regData.expiresAt,
+        token: adminResult.token,
+        sdkKey: adminResult.sdkKey,
       });
     }
 
@@ -142,11 +204,20 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
     };
     await store.saveServerLicense(sl);
 
+    let adminResult;
+    try {
+      adminResult = await createAdminAccount();
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'Failed to create admin account' });
+    }
+
     return reply.send({
       success: true,
       plan: 'enterprise',
       features: PLAN_FEATURES['enterprise'] ?? [],
       expiresAt: licensePayload.expiresAt,
+      token: adminResult.token,
+      sdkKey: adminResult.sdkKey,
     });
   });
 }

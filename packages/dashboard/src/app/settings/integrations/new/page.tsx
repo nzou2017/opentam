@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -51,7 +52,7 @@ export default function NewIntegrationPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${backendConfig.secretKey}`,
+          Authorization: `Bearer ${await getClientToken()}`,
         },
         body: JSON.stringify({ type, name, config }),
       });
@@ -62,7 +63,7 @@ export default function NewIntegrationPage() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${backendConfig.secretKey}`,
+            Authorization: `Bearer ${await getClientToken()}`,
           },
           body: JSON.stringify({ eventType: 'frustration_high' }),
         });
@@ -85,7 +86,7 @@ export default function NewIntegrationPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${backendConfig.secretKey}`,
+          Authorization: `Bearer ${await getClientToken()}`,
         },
         body: JSON.stringify({ type, name: `test-${Date.now()}`, config, enabled: false }),
       });
@@ -93,13 +94,13 @@ export default function NewIntegrationPage() {
         const data = await res.json() as { integration: { id: string } };
         const testRes = await fetch(`${backendConfig.backendUrl}/api/v1/tenant/integrations/${data.integration.id}/test`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
+          headers: { Authorization: `Bearer ${await getClientToken()}` },
         });
         setTestResult(await testRes.json() as { ok: boolean; error?: string });
         // Cleanup
         await fetch(`${backendConfig.backendUrl}/api/v1/tenant/integrations/${data.integration.id}`, {
           method: 'DELETE',
-          headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
+          headers: { Authorization: `Bearer ${await getClientToken()}` },
         });
       }
     } catch { setTestResult({ ok: false, error: 'Test failed' }); }

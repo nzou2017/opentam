@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -20,8 +21,12 @@ function emptyQuestion(): SurveyQuestion {
 
 export default function NewSurveyPage() {
   const router = useRouter();
-  const token = typeof window !== 'undefined' ? localStorage.getItem('q_token') : null;
+  const [token, setToken] = useState<string | null>(null);
   const [licensed, setLicensed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    getClientToken().then(t => setToken(t || null));
+  }, []);
 
   useEffect(() => {
     if (!token) return;

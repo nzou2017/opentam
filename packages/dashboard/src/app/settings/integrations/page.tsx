@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -27,9 +28,10 @@ const typeColors: Record<string, string> = {
 export default function IntegrationsPage() {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
 
-  function load() {
+  async function load() {
+    const token = await getClientToken();
     fetch(`${backendConfig.backendUrl}/api/v1/tenant/integrations`, {
-      headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
+      headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.json())
       .then((data: { integrations?: Integration[] }) => setIntegrations(data.integrations ?? []))
@@ -43,7 +45,7 @@ export default function IntegrationsPage() {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${backendConfig.secretKey}`,
+        Authorization: `Bearer ${await getClientToken()}`,
       },
       body: JSON.stringify({ enabled }),
     });
@@ -54,7 +56,7 @@ export default function IntegrationsPage() {
     if (!confirm('Delete this integration?')) return;
     await fetch(`${backendConfig.backendUrl}/api/v1/tenant/integrations/${id}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${backendConfig.secretKey}` },
+      headers: { Authorization: `Bearer ${await getClientToken()}` },
     });
     load();
   }

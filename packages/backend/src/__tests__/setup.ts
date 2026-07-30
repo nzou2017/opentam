@@ -6,7 +6,7 @@
  * Every test file that imports `buildApp()` gets a fresh app + fresh store.
  */
 import Fastify, { type FastifyInstance } from 'fastify';
-import { initStore } from '../db/index.js';
+import { initStore, getStore } from '../db/index.js';
 import { registerCors } from '../plugins/cors.js';
 import { registerAuthHook } from '../middleware/auth.js';
 
@@ -86,7 +86,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 /** Helper to register a user and get a JWT token back */
 export async function registerAndGetToken(
   app: FastifyInstance,
-  overrides?: { email?: string; password?: string; name?: string },
+  overrides?: { email?: string; password?: string; name?: string; plan?: 'hobbyist' | 'startup' | 'enterprise' },
 ) {
   const email = overrides?.email ?? `test-${Date.now()}@example.com`;
   const res = await app.inject({
@@ -99,5 +99,13 @@ export async function registerAndGetToken(
     },
   });
   const body = JSON.parse(res.body);
-  return { token: body.token as string, user: body.user, tenantId: body.user?.tenantId as string };
+  const tenantId = body.user?.tenantId as string;
+
+  // Registration always creates a hobbyist-plan tenant; bump it for tests
+  // that need to exercise startup/enterprise-gated features.
+  if (overrides?.plan && overrides.plan !== 'hobbyist') {
+    await getStore().updateTenant(tenantId, { plan: overrides.plan });
+  }
+
+  return { token: body.token as string, user: body.user, tenantId };
 }

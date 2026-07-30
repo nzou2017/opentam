@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -70,18 +71,16 @@ export default function FeatureRequestsPage() {
   const [duplicates, setDuplicates] = useState<FeatureRequest[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Token from cookie
+  // Token from httpOnly session cookie
   const [token, setToken] = useState<string | null>(null);
   useEffect(() => {
-    const match = document.cookie.match(/(?:^|;\s*)q_token=([^;]*)/);
-    if (match) setToken(match[1]);
+    getClientToken().then(t => setToken(t || null));
   }, []);
 
   // License check
   useEffect(() => {
-    const t = token ?? localStorage.getItem('q_token');
-    if (!t) return;
-    getLicenseInfo(t).then((info) => {
+    if (!token) return;
+    getLicenseInfo(token).then((info) => {
       setLicensed(info.licensed && info.features.includes('feature_requests'));
     }).catch(() => setLicensed(false));
   }, [token]);

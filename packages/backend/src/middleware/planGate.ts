@@ -7,14 +7,32 @@ import type { AuthenticatedRequest } from './auth.js';
 import { isFeatureLicensed } from '../license.js';
 
 /**
+ * A tenant's `plan` column is only trustworthy for gating if any Enterprise
+ * grant behind it hasn't expired. `licenseExpiresAt` is only ever set when
+ * `plan` was raised via a per-tenant license key (see routes/tenant.ts);
+ * plans set directly (e.g. self-hosted setup wizard) have no expiry to check.
+ */
+function effectivePlan(tenant?: { plan: string; licenseExpiresAt?: string }): Plan {
+  const plan = (tenant?.plan ?? 'hobbyist') as Plan;
+  if (plan === 'enterprise' && tenant?.licenseExpiresAt && new Date(tenant.licenseExpiresAt) < new Date()) {
+    return 'hobbyist';
+  }
+  return plan;
+}
+
+/**
  * Fastify preHandler that gates a route behind enterprise features.
  *
  * Access is granted if EITHER:
- * - The tenant plan meets the minimum requirement, OR
- * - A valid license key includes this feature
+ * - The tenant plan meets the minimum requirement (and, if granted via a
+ *   per-tenant license key, that key hasn't expired), OR
+ * - The deployment-wide signed license key includes this feature
  *
- * In practice, self-hosted users need a signed license key.
- * SaaS users with an enterprise plan in the DB also pass.
+ * In practice, self-hosted single-tenant installs rely on the deployment-wide
+ * license key. Multi-tenant SaaS tenants are gated purely by their own
+ * `plan` column, which per-tenant license activation updates directly
+ * (routes/tenant.ts) — the deployment-wide license is never mutated by a
+ * tenant's own key, so it can't leak Enterprise access across tenants.
  *
  * Returns 403 with diagnostic info if neither check passes.
  */
@@ -25,7 +43,7 @@ export function requirePlan(feature: Feature) {
     done: HookHandlerDoneFunction,
   ): void {
     const req = request as AuthenticatedRequest;
-    const plan = (req.tenant?.plan ?? 'hobbyist') as Plan;
+    const plan = effectivePlan(req.tenant);
 
     const planOk = hasFeature(plan, feature);
     const licensed = isFeatureLicensed(feature);

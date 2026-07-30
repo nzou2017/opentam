@@ -1,4 +1,5 @@
 'use client';
+import { getClientToken } from '@/lib/clientAuth';
 
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -16,12 +17,14 @@ export default function SSOSettingsPage() {
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    const token = localStorage.getItem('q_token');
-    if (token) {
-      getLicenseInfo(token).then((info) => {
-        setLicensed(info.licensed && info.features.includes('sso'));
-      }).catch(() => setLicensed(false));
-    }
+    (async () => {
+      const token = await getClientToken();
+      if (token) {
+        getLicenseInfo(token).then((info) => {
+          setLicensed(info.licensed && info.features.includes('sso'));
+        }).catch(() => setLicensed(false));
+      }
+    })();
   }, []);
 
   async function handleSave(e: React.FormEvent) {

@@ -39,9 +39,9 @@ export type Plan = 'hobbyist' | 'startup' | 'enterprise';
 
 export const FEATURE_MIN_PLAN: Record<Feature, Plan> = {
   sso: 'enterprise',
-  team: 'enterprise',
-  surveys: 'enterprise',
-  feature_requests: 'enterprise',
+  team: 'startup',
+  surveys: 'startup',
+  feature_requests: 'hobbyist',
 };
 
 const PLAN_RANK: Record<Plan, number> = { hobbyist: 0, startup: 1, enterprise: 2 };
@@ -63,6 +63,10 @@ export interface Tenant {
    * Used for plan-based billing restrictions (e.g. hobbyist → haiku, enterprise → opus).
    */
   model?: string;
+  /** Signed Enterprise license key activated for this tenant, if any. */
+  licenseKey?: string;
+  /** ISO expiry of the activated license key. Past this date, plan is treated as expired. */
+  licenseExpiresAt?: string;
 }
 
 // FunctionalMapEntry

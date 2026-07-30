@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   description: 'OpenTAM admin dashboard',
 };
 
-const AUTH_PATHS = ['/login', '/register', '/forgot-password', '/reset-password', '/change-password'];
+const AUTH_PATHS = ['/login', '/register', '/forgot-password', '/reset-password', '/change-password', '/setup'];
 
 async function fetchLicensedFeatures(): Promise<Feature[] | undefined> {
   try {
