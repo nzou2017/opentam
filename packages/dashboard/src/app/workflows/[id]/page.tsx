@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { getWorkflow, updateWorkflow, updateWorkflowSteps, publishWorkflow, getMapEntries } from '@/lib/api';
+import { getClientToken } from '@/lib/clientAuth';
 
 interface StepInput {
   id: string;
@@ -59,9 +60,10 @@ export default function WorkflowEditorPage() {
   async function loadData() {
     setLoading(true);
     try {
+      const token = await getClientToken();
       const [wfData, entries] = await Promise.all([
-        getWorkflow(workflowId),
-        getMapEntries().then(d => d.entries).catch(() => []),
+        getWorkflow(workflowId, token),
+        getMapEntries(token).then(d => d.entries).catch(() => []),
       ]);
       setWorkflow(wfData.workflow);
       setName(wfData.workflow.name);
@@ -130,8 +132,9 @@ export default function WorkflowEditorPage() {
     setSaving(true);
     setError('');
     try {
-      await updateWorkflow(workflowId, { name: name.trim(), description: description.trim() });
-      await updateWorkflowSteps(workflowId, steps);
+      const token = await getClientToken();
+      await updateWorkflow(workflowId, { name: name.trim(), description: description.trim() }, token);
+      await updateWorkflowSteps(workflowId, steps, token);
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save');
@@ -143,7 +146,8 @@ export default function WorkflowEditorPage() {
   async function handlePublish() {
     await handleSave();
     try {
-      const data = await publishWorkflow(workflowId);
+      const token = await getClientToken();
+      const data = await publishWorkflow(workflowId, token);
       setWorkflow(data.workflow);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to publish');

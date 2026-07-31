@@ -31,7 +31,7 @@ export default function NewSurveyPage() {
   useEffect(() => {
     if (!token) return;
     getLicenseInfo(token).then((info) => {
-      setLicensed(info.licensed && info.features.includes('surveys'));
+      setLicensed(info.features.includes('surveys'));
     }).catch(() => setLicensed(false));
   }, [token]);
 

@@ -21,7 +21,7 @@ export default function SSOSettingsPage() {
       const token = await getClientToken();
       if (token) {
         getLicenseInfo(token).then((info) => {
-          setLicensed(info.licensed && info.features.includes('sso'));
+          setLicensed(info.features.includes('sso'));
         }).catch(() => setLicensed(false));
       }
     })();

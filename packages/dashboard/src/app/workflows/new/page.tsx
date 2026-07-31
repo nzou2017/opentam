@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createWorkflow } from '@/lib/api';
+import { getClientToken } from '@/lib/clientAuth';
 
 export default function NewWorkflowPage() {
   const router = useRouter();
@@ -22,6 +23,7 @@ export default function NewWorkflowPage() {
     setSaving(true);
     setError('');
     try {
+      const token = await getClientToken();
       const data = await createWorkflow({
         name: name.trim(),
         description: description.trim(),
@@ -34,7 +36,7 @@ export default function NewWorkflowPage() {
             contextHint: 'First step',
           },
         ],
-      });
+      }, token);
       router.push(`/workflows/${data.workflow.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create workflow');

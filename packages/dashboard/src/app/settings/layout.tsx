@@ -16,7 +16,10 @@ async function fetchLicensedFeatures(): Promise<Feature[] | undefined> {
     });
     if (!res.ok) return undefined;
     const data = await res.json() as { licensed: boolean; features: Feature[] };
-    return data.licensed ? data.features : [];
+    // `features` already reflects the tenant's actual plan — don't also
+    // gate on `licensed` ("on Enterprise specifically"), or startup-tier
+    // features like team/surveys get hidden for non-Enterprise tenants.
+    return data.features;
   } catch {
     return undefined;
   }

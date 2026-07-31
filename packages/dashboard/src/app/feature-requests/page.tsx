@@ -81,7 +81,7 @@ export default function FeatureRequestsPage() {
   useEffect(() => {
     if (!token) return;
     getLicenseInfo(token).then((info) => {
-      setLicensed(info.licensed && info.features.includes('feature_requests'));
+      setLicensed(info.features.includes('feature_requests'));
     }).catch(() => setLicensed(false));
   }, [token]);
 

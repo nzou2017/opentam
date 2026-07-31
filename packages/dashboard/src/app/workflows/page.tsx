@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getWorkflows, deleteWorkflow, publishWorkflow } from '@/lib/api';
+import { getClientToken } from '@/lib/clientAuth';
 import { DataTable } from '@/components/DataTable';
 import type { Column } from '@/components/DataTable';
 
@@ -41,7 +42,8 @@ export default function WorkflowsPage() {
   async function loadWorkflows() {
     setLoading(true);
     try {
-      const data = await getWorkflows(undefined, null, true);
+      const token = await getClientToken();
+      const data = await getWorkflows(undefined, token, true);
       setWorkflows(data.workflows);
       setReferenceWorkflows(data.referenceWorkflows ?? []);
     } catch (err) {
@@ -54,7 +56,8 @@ export default function WorkflowsPage() {
   async function handleDelete(id: string) {
     if (!confirm('Delete this workflow?')) return;
     try {
-      await deleteWorkflow(id);
+      const token = await getClientToken();
+      await deleteWorkflow(id, token);
       setWorkflows(workflows.filter((w) => w.id !== id));
     } catch (err) {
       console.error('Failed to delete workflow:', err);
@@ -63,7 +66,8 @@ export default function WorkflowsPage() {
 
   async function handlePublish(id: string) {
     try {
-      const data = await publishWorkflow(id);
+      const token = await getClientToken();
+      const data = await publishWorkflow(id, token);
       setWorkflows(workflows.map((w) => (w.id === id ? data.workflow : w)));
     } catch (err) {
       console.error('Failed to publish workflow:', err);

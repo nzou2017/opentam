@@ -53,7 +53,7 @@ export default function TeamSettingsPage() {
       const token = await getClientToken();
       if (token) {
         getLicenseInfo(token).then((info) => {
-          setLicensed(info.licensed && info.features.includes('team'));
+          setLicensed(info.features.includes('team'));
         }).catch(() => setLicensed(false));
       }
       loadUsers();

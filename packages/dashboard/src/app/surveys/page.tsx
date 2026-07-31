@@ -29,7 +29,7 @@ export default function SurveysPage() {
     if (!token) return;
     try {
       const licenseInfo = await getLicenseInfo(token);
-      if (!licenseInfo.licensed || !licenseInfo.features.includes('surveys')) {
+      if (!licenseInfo.features.includes('surveys')) {
         setLicensed(false);
         setLoading(false);
         return;
