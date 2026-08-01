@@ -125,6 +125,22 @@ export const usageLimits = sqliteTable('usage_limits', {
   maxSdkKeys: integer('max_sdk_keys'),
 });
 
+export const crawlJobs = sqliteTable('crawl_jobs', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull().references(() => tenants.id),
+  rootUrl: text('root_url').notNull(),
+  maxPages: integer('max_pages').notNull(),
+  maxDepth: integer('max_depth').notNull(),
+  status: text('status', { enum: ['running', 'completed', 'failed', 'cancelled'] }).notNull().default('running'),
+  pagesIngested: integer('pages_ingested').notNull().default(0),
+  pagesQueued: integer('pages_queued').notNull().default(0),
+  pagesFailed: integer('pages_failed').notNull().default(0),
+  totalChunks: integer('total_chunks').notNull().default(0),
+  error: text('error'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
 export const integrations = sqliteTable('integrations', {
   id: text('id').primaryKey(),
   tenantId: text('tenant_id').notNull().references(() => tenants.id),

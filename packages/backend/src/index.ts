@@ -5,7 +5,7 @@ import Fastify from 'fastify';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config } from './config.js';
-import { initStore } from './db/index.js';
+import { initStore, getStore } from './db/index.js';
 import { registerCors } from './plugins/cors.js';
 import { healthRoutes } from './routes/health.js';
 import { eventsRoutes } from './routes/events.js';
@@ -53,6 +53,11 @@ async function bootstrap(): Promise<void> {
 
   // Initialize store
   await initStore();
+
+  // Any crawl job still 'running' belonged to a previous process that's
+  // gone (a crash or redeploy) — it can never finish, so surface that to
+  // the user instead of leaving it stuck showing "running" forever.
+  await getStore().failRunningCrawlJobs('Interrupted by a server restart');
 
   // Initialize license verification
   await initLicense();

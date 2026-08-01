@@ -4,6 +4,7 @@
 import { parse as parseHtml } from 'node-html-parser';
 import { fetchRobotsTxt, isAllowedByRobots } from './robots.js';
 import { ingestText } from '../ingestion/pipeline.js';
+import { getStore } from '../db/index.js';
 
 export interface SpiderOptions {
   rootUrl: string;
@@ -19,23 +20,6 @@ export interface SpiderResult {
   pagesFailed: number;
   totalChunks: number;
   urls: string[];
-}
-
-export interface SpiderJob {
-  id: string;
-  tenantId: string;
-  status: 'running' | 'completed' | 'failed';
-  progress: { pagesIngested: number; pagesQueued: number };
-  result?: SpiderResult;
-  error?: string;
-  createdAt: string;
-}
-
-// In-memory job tracking
-const jobs = new Map<string, SpiderJob>();
-
-export function getSpiderJob(jobId: string): SpiderJob | undefined {
-  return jobs.get(jobId);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -114,17 +98,16 @@ function extractText(html: string): string {
   return root.text.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Runs the crawl for an already-created crawl_jobs row (see routes/spider.ts,
+ * which creates the row synchronously before firing this off detached, so a
+ * client polling immediately after the 202 response always finds it).
+ * Checks the job's own status before each page so a 'cancelled' write from
+ * the cancel endpoint stops the crawl at the next iteration.
+ */
 export async function spiderDocs(tenantId: string, options: SpiderOptions, jobId: string): Promise<SpiderResult> {
   const { rootUrl, maxPages = 200, maxDepth = 3, delayMs = 200, allowPatterns = [], denyPatterns = [] } = options;
-
-  const job: SpiderJob = {
-    id: jobId,
-    tenantId,
-    status: 'running',
-    progress: { pagesIngested: 0, pagesQueued: 0 },
-    createdAt: new Date().toISOString(),
-  };
-  jobs.set(jobId, job);
+  const store = getStore();
 
   const result: SpiderResult = { pagesIngested: 0, pagesFailed: 0, totalChunks: 0, urls: [] };
   const visited = new Set<string>();
@@ -146,9 +129,14 @@ export async function spiderDocs(tenantId: string, options: SpiderOptions, jobId
       queue.push({ url: rootUrl, depth: 0 });
     }
 
-    job.progress.pagesQueued = queue.length;
+    await store.updateCrawlJob(jobId, { pagesQueued: queue.length });
 
     while (queue.length > 0 && result.pagesIngested < maxPages) {
+      // Cancellation check — a running job can be marked 'cancelled' from
+      // outside (POST /api/v1/spider/:jobId/cancel) at any time.
+      const current = await store.getCrawlJob(jobId);
+      if (!current || current.status !== 'running') break;
+
       const { url, depth } = queue.shift()!;
 
       if (visited.has(url)) continue;
@@ -191,9 +179,6 @@ export async function spiderDocs(tenantId: string, options: SpiderOptions, jobId
         result.totalChunks += ingestResult.chunks;
         result.urls.push(url);
 
-        // Update job progress
-        job.progress.pagesIngested = result.pagesIngested;
-
         // Extract links for further crawling
         if (depth < maxDepth) {
           const links = extractLinks(html, url);
@@ -202,18 +187,35 @@ export async function spiderDocs(tenantId: string, options: SpiderOptions, jobId
               queue.push({ url: link, depth: depth + 1 });
             }
           }
-          job.progress.pagesQueued = visited.size + queue.length;
         }
+
+        await store.updateCrawlJob(jobId, {
+          pagesIngested: result.pagesIngested,
+          pagesFailed: result.pagesFailed,
+          totalChunks: result.totalChunks,
+          pagesQueued: visited.size + queue.length,
+        });
       } catch {
         result.pagesFailed++;
+        await store.updateCrawlJob(jobId, { pagesFailed: result.pagesFailed });
       }
     }
 
-    job.status = 'completed';
-    job.result = result;
+    // Only overwrite to 'completed' if it wasn't cancelled out from under us.
+    const finalJob = await store.getCrawlJob(jobId);
+    if (finalJob?.status === 'running') {
+      await store.updateCrawlJob(jobId, {
+        status: 'completed',
+        pagesIngested: result.pagesIngested,
+        pagesFailed: result.pagesFailed,
+        totalChunks: result.totalChunks,
+      });
+    }
   } catch (err) {
-    job.status = 'failed';
-    job.error = err instanceof Error ? err.message : String(err);
+    await store.updateCrawlJob(jobId, {
+      status: 'failed',
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   return result;

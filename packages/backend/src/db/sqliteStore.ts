@@ -3,9 +3,9 @@
 
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { eq, and, sql, gte, like } from 'drizzle-orm';
+import { eq, and, sql, gte, like, desc } from 'drizzle-orm';
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
-import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite } from './store.js';
+import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob } from './store.js';
 import * as schema from './schema.js';
 import { encrypt, decrypt } from '../crypto.js';
 
@@ -167,6 +167,23 @@ export class SqliteStore implements Store {
         enabled INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+
+      CREATE TABLE IF NOT EXISTS crawl_jobs (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        root_url TEXT NOT NULL,
+        max_pages INTEGER NOT NULL,
+        max_depth INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        pages_ingested INTEGER NOT NULL DEFAULT 0,
+        pages_queued INTEGER NOT NULL DEFAULT 0,
+        pages_failed INTEGER NOT NULL DEFAULT 0,
+        total_chunks INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_crawl_jobs_tenant ON crawl_jobs(tenant_id, created_at);
 
       CREATE TABLE IF NOT EXISTS integration_triggers (
         id TEXT PRIMARY KEY,
@@ -769,6 +786,78 @@ export class SqliteStore implements Store {
       results.push({ month: monthStr, events, chats });
     }
     return results;
+  }
+
+  // ── Crawl jobs (docs spider) ─────────────────────────────────────────
+
+  async createCrawlJob(job: CrawlJob): Promise<void> {
+    this.db.insert(schema.crawlJobs).values({
+      id: job.id,
+      tenantId: job.tenantId,
+      rootUrl: job.rootUrl,
+      maxPages: job.maxPages,
+      maxDepth: job.maxDepth,
+      status: job.status,
+      pagesIngested: job.pagesIngested,
+      pagesQueued: job.pagesQueued,
+      pagesFailed: job.pagesFailed,
+      totalChunks: job.totalChunks,
+      error: job.error ?? null,
+    }).run();
+  }
+
+  async updateCrawlJob(id: string, patch: Partial<Omit<CrawlJob, 'id' | 'tenantId'>>): Promise<CrawlJob | undefined> {
+    const values: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    if (patch.status !== undefined) values.status = patch.status;
+    if (patch.pagesIngested !== undefined) values.pagesIngested = patch.pagesIngested;
+    if (patch.pagesQueued !== undefined) values.pagesQueued = patch.pagesQueued;
+    if (patch.pagesFailed !== undefined) values.pagesFailed = patch.pagesFailed;
+    if (patch.totalChunks !== undefined) values.totalChunks = patch.totalChunks;
+    if (patch.error !== undefined) values.error = patch.error;
+
+    this.db.update(schema.crawlJobs).set(values).where(eq(schema.crawlJobs.id, id)).run();
+    return this.getCrawlJob(id);
+  }
+
+  async getCrawlJob(id: string): Promise<CrawlJob | undefined> {
+    const row = this.db.select().from(schema.crawlJobs).where(eq(schema.crawlJobs.id, id)).get();
+    return row ? this.toCrawlJob(row) : undefined;
+  }
+
+  async getCrawlJobsByTenantId(tenantId: string): Promise<CrawlJob[]> {
+    const rows = this.db.select().from(schema.crawlJobs)
+      .where(eq(schema.crawlJobs.tenantId, tenantId))
+      .orderBy(desc(schema.crawlJobs.createdAt)).all();
+    return rows.map(this.toCrawlJob);
+  }
+
+  async deleteCrawlJob(id: string): Promise<boolean> {
+    const result = this.db.delete(schema.crawlJobs).where(eq(schema.crawlJobs.id, id)).run();
+    return result.changes > 0;
+  }
+
+  async failRunningCrawlJobs(reason: string): Promise<void> {
+    this.db.update(schema.crawlJobs)
+      .set({ status: 'failed', error: reason, updatedAt: new Date().toISOString() })
+      .where(eq(schema.crawlJobs.status, 'running')).run();
+  }
+
+  private toCrawlJob(row: typeof schema.crawlJobs.$inferSelect): CrawlJob {
+    return {
+      id: row.id,
+      tenantId: row.tenantId,
+      rootUrl: row.rootUrl,
+      maxPages: row.maxPages,
+      maxDepth: row.maxDepth,
+      status: row.status as CrawlJob['status'],
+      pagesIngested: row.pagesIngested,
+      pagesQueued: row.pagesQueued,
+      pagesFailed: row.pagesFailed,
+      totalChunks: row.totalChunks,
+      error: row.error ?? undefined,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
   }
 
   // ── Integrations ─────────────────────────────────────────────────────

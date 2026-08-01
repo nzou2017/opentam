@@ -18,6 +18,22 @@ export interface ServerLicense {
   updatedAt: string;
 }
 
+export interface CrawlJob {
+  id: string;
+  tenantId: string;
+  rootUrl: string;
+  maxPages: number;
+  maxDepth: number;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  pagesIngested: number;
+  pagesQueued: number;
+  pagesFailed: number;
+  totalChunks: number;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TelemetryEventRecord {
   id: string;
   tenantId: string;
@@ -157,6 +173,15 @@ export interface Store {
   getUsageLimits(tenantId: string): Promise<UsageLimits | undefined>;
   setUsageLimits(limits: UsageLimits): Promise<void>;
   getUsageHistory(tenantId: string, months: number): Promise<{ month: string; events: number; chats: number }[]>;
+
+  // ── Crawl jobs (docs spider) ─────────────────────────────────────────
+  createCrawlJob(job: CrawlJob): Promise<void>;
+  updateCrawlJob(id: string, patch: Partial<Omit<CrawlJob, 'id' | 'tenantId'>>): Promise<CrawlJob | undefined>;
+  getCrawlJob(id: string): Promise<CrawlJob | undefined>;
+  getCrawlJobsByTenantId(tenantId: string): Promise<CrawlJob[]>;
+  deleteCrawlJob(id: string): Promise<boolean>;
+  /** Called once at startup — any job still 'running' belonged to a process that's gone, so it can never finish. */
+  failRunningCrawlJobs(reason: string): Promise<void>;
 
   // ── Integrations ─────────────────────────────────────────────────────
   getIntegrationsByTenantId(tenantId: string): Promise<Integration[]>;

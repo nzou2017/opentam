@@ -8,7 +8,7 @@ import type { MapCandidate } from './mapper.js';
 import { ingestText } from '../ingestion/pipeline.js';
 
 export type { MapCandidate };
-export { spiderDocs, getSpiderJob } from './spider.js';
+export { spiderDocs } from './spider.js';
 
 export interface CrawlResult {
   candidates: MapCandidate[];

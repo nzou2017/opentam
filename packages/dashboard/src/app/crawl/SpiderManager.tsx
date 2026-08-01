@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001';
 
@@ -15,93 +15,87 @@ async function getAuthToken(): Promise<string> {
   return token;
 }
 
-interface SpiderJob {
+type JobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+
+interface CrawlJob {
   id: string;
-  status: 'running' | 'completed' | 'failed';
-  progress: { pagesIngested: number; pagesQueued: number };
-  result?: { pagesIngested: number; pagesFailed: number; totalChunks: number; urls: string[] };
+  rootUrl: string;
+  maxPages: number;
+  maxDepth: number;
+  status: JobStatus;
+  pagesIngested: number;
+  pagesQueued: number;
+  pagesFailed: number;
+  totalChunks: number;
   error?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-const SPIDER_JOB_KEY = 'q_spider_job';
-
-interface SavedJob { jobId: string; maxPages: number }
-
-function saveJob(jobId: string, maxPages: number) {
-  try { localStorage.setItem(SPIDER_JOB_KEY, JSON.stringify({ jobId, maxPages })); } catch {}
-}
-function loadJob(): SavedJob | null {
-  try {
-    const raw = localStorage.getItem(SPIDER_JOB_KEY);
-    return raw ? JSON.parse(raw) as SavedJob : null;
-  } catch { return null; }
-}
-function clearJob() {
-  try { localStorage.removeItem(SPIDER_JOB_KEY); } catch {}
-}
+const STATUS_STYLES: Record<JobStatus, string> = {
+  running: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+  completed: 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300',
+  failed: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
+  cancelled: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
+};
 
 export function SpiderManager() {
   const [rootUrl, setRootUrl] = useState('');
   const [maxPages, setMaxPages] = useState(50);
   const [maxDepth, setMaxDepth] = useState(3);
-  const [loading, setLoading] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [job, setJob] = useState<SpiderJob | null>(null);
+  const [jobs, setJobs] = useState<CrawlJob[]>([]);
+  const [jobsLoaded, setJobsLoaded] = useState(false);
+  const [busyJobIds, setBusyJobIds] = useState<Set<string>>(new Set());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Resume polling if there's an active job from a previous navigation
-  useEffect(() => {
-    const saved = loadJob();
-    if (saved) {
-      setLoading(true);
-      setMaxPages(saved.maxPages);
-      // Fetch immediately, then start interval
-      resumeJob(saved.jobId);
-    }
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function resumeJob(jobId: string) {
-    // Immediate fetch so user sees current state right away
-    await pollOnce(jobId);
-    startPolling(jobId);
-  }
-
-  async function pollOnce(jobId: string): Promise<boolean> {
+  const fetchJobs = useCallback(async () => {
     try {
-      const pollRes = await fetch(`${BACKEND_URL}/api/v1/spider/${jobId}`, {
+      const res = await fetch(`${BACKEND_URL}/api/v1/spider`, {
         headers: { Authorization: `Bearer ${await getAuthToken()}` },
       });
-      if (pollRes.ok) {
-        const data = await pollRes.json() as SpiderJob;
-        setJob(data);
-        if (data.status !== 'running') {
-          if (pollRef.current) clearInterval(pollRef.current);
-          clearJob();
-          setLoading(false);
-          return false; // done
-        }
-      } else if (pollRes.status === 404) {
-        if (pollRef.current) clearInterval(pollRef.current);
-        clearJob();
-        setLoading(false);
-        return false;
+      if (res.ok) {
+        const data = await res.json() as { jobs: CrawlJob[] };
+        setJobs(data.jobs);
       }
-    } catch { /* keep going */ }
-    return true; // still running
+    } catch { /* transient network error — keep showing the last known state */ } finally {
+      setJobsLoaded(true);
+    }
+  }, []);
+
+  // Load job history on mount. All job state lives on the backend now, so
+  // this works the same after a refresh, in a new tab, or on another device
+  // — nothing to resume from localStorage.
+  useEffect(() => {
+    fetchJobs();
+  }, [fetchJobs]);
+
+  // Poll only while something is actually running.
+  useEffect(() => {
+    const hasRunning = jobs.some(j => j.status === 'running');
+    if (hasRunning && !pollRef.current) {
+      pollRef.current = setInterval(fetchJobs, 2000);
+    } else if (!hasRunning && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    };
+  }, [jobs, fetchJobs]);
+
+  function setBusy(jobId: string, busy: boolean) {
+    setBusyJobIds(prev => {
+      const next = new Set(prev);
+      if (busy) next.add(jobId); else next.delete(jobId);
+      return next;
+    });
   }
 
-  function startPolling(jobId: string) {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(() => pollOnce(jobId), 2000);
-  }
-
-  async function handleStart() {
-    if (!rootUrl.trim()) return;
-    setLoading(true);
+  async function startJob(target: { rootUrl: string; maxPages: number; maxDepth: number }) {
+    setStarting(true);
     setError(null);
-    setJob(null);
-
     try {
       const res = await fetch(`${BACKEND_URL}/api/v1/spider`, {
         method: 'POST',
@@ -109,20 +103,55 @@ export function SpiderManager() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${await getAuthToken()}`,
         },
-        body: JSON.stringify({ rootUrl: rootUrl.trim(), maxPages, maxDepth }),
+        body: JSON.stringify(target),
       });
-
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
         throw new Error(body.error ?? `HTTP ${res.status}`);
       }
-
-      const { jobId } = await res.json() as { jobId: string };
-      saveJob(jobId, maxPages);
-      startPolling(jobId);
+      await fetchJobs();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
-      setLoading(false);
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  async function handleStart(e: React.FormEvent) {
+    e.preventDefault();
+    if (!rootUrl.trim()) return;
+    await startJob({ rootUrl: rootUrl.trim(), maxPages, maxDepth });
+    setRootUrl('');
+  }
+
+  async function handleRetry(job: CrawlJob) {
+    await startJob({ rootUrl: job.rootUrl, maxPages: job.maxPages, maxDepth: job.maxDepth });
+  }
+
+  async function handleCancel(jobId: string) {
+    setBusy(jobId, true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/spider/${jobId}/cancel`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${await getAuthToken()}` },
+      });
+      if (res.ok) await fetchJobs();
+    } finally {
+      setBusy(jobId, false);
+    }
+  }
+
+  async function handleRemove(jobId: string) {
+    if (!confirm('Remove this job from history? This does not delete any pages it already ingested.')) return;
+    setBusy(jobId, true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/spider/${jobId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${await getAuthToken()}` },
+      });
+      if (res.ok) setJobs(prev => prev.filter(j => j.id !== jobId));
+    } finally {
+      setBusy(jobId, false);
     }
   }
 
@@ -130,55 +159,57 @@ export function SpiderManager() {
     <div className="flex flex-col gap-6">
       <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-6 shadow-sm">
         <h3 className="mb-4 text-base font-medium text-gray-800 dark:text-gray-200">Configure Spider</h3>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div className="sm:col-span-3">
-            <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Root URL <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="url"
-              placeholder="https://docs.example.com"
-              value={rootUrl}
-              onChange={(e) => setRootUrl(e.target.value)}
-              aria-label="Root URL"
-              className="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-            />
+        <form onSubmit={handleStart}>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="sm:col-span-3">
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Root URL <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="url"
+                placeholder="https://docs.example.com"
+                value={rootUrl}
+                onChange={(e) => setRootUrl(e.target.value)}
+                aria-label="Root URL"
+                className="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Max Pages</label>
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                value={maxPages}
+                onChange={(e) => setMaxPages(Number(e.target.value))}
+                aria-label="Max pages"
+                className="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Max Depth</label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={maxDepth}
+                onChange={(e) => setMaxDepth(Number(e.target.value))}
+                aria-label="Max depth"
+                className="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
           </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Max Pages</label>
-            <input
-              type="number"
-              min={1}
-              max={1000}
-              value={maxPages}
-              onChange={(e) => setMaxPages(Number(e.target.value))}
-              aria-label="Max pages"
-              className="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-            />
+          <div className="mt-4">
+            <button
+              type="submit"
+              disabled={starting || !rootUrl.trim()}
+              aria-label="Start spider"
+              className="rounded-md bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 shadow-sm transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {starting ? 'Starting...' : 'Start Spider'}
+            </button>
           </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Max Depth</label>
-            <input
-              type="number"
-              min={1}
-              max={10}
-              value={maxDepth}
-              onChange={(e) => setMaxDepth(Number(e.target.value))}
-              aria-label="Max depth"
-              className="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-            />
-          </div>
-        </div>
-        <div className="mt-4">
-          <button
-            onClick={handleStart}
-            disabled={loading || !rootUrl.trim()}
-            aria-label="Start spider"
-            className="rounded-md bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 shadow-sm transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {loading ? 'Crawling...' : 'Start Spider'}
-          </button>
-        </div>
+        </form>
       </div>
 
       {error && (
@@ -187,55 +218,100 @@ export function SpiderManager() {
         </div>
       )}
 
-      {job && (
-        <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-6 shadow-sm">
-          <div className="flex items-center gap-3 mb-3">
-            <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              job.status === 'running' ? 'bg-blue-100 text-blue-800' :
-              job.status === 'completed' ? 'bg-green-100 text-green-800' :
-              'bg-red-100 text-red-800'
-            }`}>
-              {job.status}
-            </span>
-            <span className="text-sm text-gray-600 dark:text-gray-400">
-              {job.progress.pagesIngested} pages ingested
-            </span>
-          </div>
-
-          {job.status === 'running' && (
-            <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden mb-3">
-              <div
-                className="h-full rounded-full bg-amber-500 transition-all"
-                style={{ width: `${Math.min((job.progress.pagesIngested / (maxPages || 50)) * 100, 100)}%` }}
-              />
-            </div>
-          )}
-
-          {job.result && (
-            <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
-              <p>Pages ingested: <strong>{job.result.pagesIngested}</strong></p>
-              <p>Pages failed: <strong>{job.result.pagesFailed}</strong></p>
-              <p>Total chunks: <strong>{job.result.totalChunks}</strong></p>
-              {job.result.urls.length > 0 && (
-                <details className="mt-2">
-                  <summary className="cursor-pointer text-amber-600 dark:text-amber-400 hover:text-amber-500">
-                    View ingested URLs ({job.result.urls.length})
-                  </summary>
-                  <ul className="mt-2 max-h-60 overflow-y-auto space-y-1">
-                    {job.result.urls.map((url, i) => (
-                      <li key={i} className="font-mono text-xs text-gray-500 truncate">{url}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )}
-
-          {job.error && (
-            <p className="text-sm text-red-600">Error: {job.error}</p>
-          )}
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-6 shadow-sm">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-base font-medium text-gray-800 dark:text-gray-200">Crawl Jobs</h3>
+          <button
+            onClick={fetchJobs}
+            aria-label="Refresh crawl jobs"
+            className="text-sm text-amber-600 dark:text-amber-400 hover:text-amber-500"
+          >
+            Refresh
+          </button>
         </div>
-      )}
+
+        {!jobsLoaded ? (
+          <p className="text-sm text-gray-500 dark:text-gray-400">Loading...</p>
+        ) : jobs.length === 0 ? (
+          <p className="text-sm text-gray-500 dark:text-gray-400">No crawl jobs yet. Start one above.</p>
+        ) : (
+          <div className="space-y-3">
+            {jobs.map((job) => {
+              const busy = busyJobIds.has(job.id);
+              const pct = job.maxPages > 0 ? Math.min((job.pagesIngested / job.maxPages) * 100, 100) : 0;
+              return (
+                <div key={job.id} className="rounded-md border border-gray-200 dark:border-gray-700 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-mono text-sm text-gray-800 dark:text-gray-200" title={job.rootUrl}>
+                        {job.rootUrl}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Started {new Date(job.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <span className={`inline-flex shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_STYLES[job.status]}`}>
+                      {job.status}
+                    </span>
+                  </div>
+
+                  {job.status === 'running' && (
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+                      <div
+                        className="h-full rounded-full bg-amber-500 transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  )}
+
+                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                    {job.pagesIngested} page{job.pagesIngested === 1 ? '' : 's'} ingested
+                    {job.status === 'running' && `, ${job.pagesQueued} queued`}
+                    {job.pagesFailed > 0 && `, ${job.pagesFailed} failed`}
+                    {job.status !== 'running' && `, ${job.totalChunks} chunks indexed`}
+                  </p>
+
+                  {job.error && (
+                    <p className="mt-1 text-sm text-red-600 dark:text-red-400">Error: {job.error}</p>
+                  )}
+
+                  <div className="mt-3 flex gap-4">
+                    {job.status === 'running' ? (
+                      <button
+                        onClick={() => handleCancel(job.id)}
+                        disabled={busy}
+                        aria-label="Cancel job"
+                        className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                      >
+                        {busy ? 'Cancelling...' : 'Cancel'}
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => handleRetry(job)}
+                          disabled={starting}
+                          aria-label="Retry job"
+                          className="text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 disabled:opacity-50"
+                        >
+                          Retry
+                        </button>
+                        <button
+                          onClick={() => handleRemove(job.id)}
+                          disabled={busy}
+                          aria-label="Remove job"
+                          className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                        >
+                          {busy ? 'Removing...' : 'Remove'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

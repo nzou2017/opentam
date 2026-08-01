@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
-import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite } from './store.js';
+import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob } from './store.js';
 
 class InMemoryStore implements Store {
   _needsAdminHash = false;
@@ -25,6 +25,7 @@ class InMemoryStore implements Store {
   private featureRequestVotesMap: Map<string, { featureRequestId: string; voterId: string }> = new Map();
   private passwordResetTokensMap: Map<string, { userId: string; expiresAt: string }> = new Map();
   private teamInvitesMap: Map<string, TeamInvite> = new Map();
+  private crawlJobsMap: Map<string, CrawlJob> = new Map();
   private auditLogsList: AuditLogEntry[] = [];
   private surveysMap: Map<string, SurveyDefinition> = new Map();
   private surveyResponsesList: SurveyResponse[] = [];
@@ -460,6 +461,44 @@ class InMemoryStore implements Store {
       results.push({ month: monthStr, events, chats });
     }
     return results;
+  }
+
+  // ── Crawl jobs (docs spider) ─────────────────────────────────────────
+
+  async createCrawlJob(job: CrawlJob): Promise<void> {
+    this.crawlJobsMap.set(job.id, job);
+  }
+
+  async updateCrawlJob(id: string, patch: Partial<Omit<CrawlJob, 'id' | 'tenantId'>>): Promise<CrawlJob | undefined> {
+    const job = this.crawlJobsMap.get(id);
+    if (!job) return undefined;
+    const updated = { ...job, ...patch, updatedAt: new Date().toISOString() };
+    this.crawlJobsMap.set(id, updated);
+    return updated;
+  }
+
+  async getCrawlJob(id: string): Promise<CrawlJob | undefined> {
+    return this.crawlJobsMap.get(id);
+  }
+
+  async getCrawlJobsByTenantId(tenantId: string): Promise<CrawlJob[]> {
+    return [...this.crawlJobsMap.values()]
+      .filter(j => j.tenantId === tenantId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async deleteCrawlJob(id: string): Promise<boolean> {
+    return this.crawlJobsMap.delete(id);
+  }
+
+  async failRunningCrawlJobs(reason: string): Promise<void> {
+    for (const job of this.crawlJobsMap.values()) {
+      if (job.status === 'running') {
+        job.status = 'failed';
+        job.error = reason;
+        job.updatedAt = new Date().toISOString();
+      }
+    }
   }
 
   // ── Integrations ─────────────────────────────────────────────────────

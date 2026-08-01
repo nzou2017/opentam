@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, SDK_KEY, SECRET_KEY, TENANT_ID, Q_ADMIN_SDK_KEY, Q_ADMIN_SECRET_KEY, Q_ADMIN_TENANT_ID, registerAndGetToken } from './setup.js';
+import { getStore } from '../db/index.js';
 
 let app: FastifyInstance;
 
@@ -2312,5 +2313,149 @@ describe('Surveys', () => {
       headers: { authorization: `Bearer ${adminToken}` },
     });
     expect(getRes.statusCode).toBe(404);
+  });
+});
+
+// ─────────────────────────────────────────────────
+// Crawl Jobs — docs spider job status/cancel/delete management.
+// Jobs are seeded directly via the store rather than through
+// POST /api/v1/spider, which would trigger a real network crawl.
+// ─────────────────────────────────────────────────
+describe('Crawl Jobs (docs spider management)', () => {
+  async function seedJob(tenantId: string, status: 'running' | 'completed' | 'failed' | 'cancelled' = 'running') {
+    const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await getStore().createCrawlJob({
+      id,
+      tenantId,
+      rootUrl: 'https://example.com/docs',
+      maxPages: 50,
+      maxDepth: 3,
+      status,
+      pagesIngested: 0,
+      pagesQueued: 0,
+      pagesFailed: 0,
+      totalChunks: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return id;
+  }
+
+  it('GET /api/v1/spider — lists jobs for the tenant, most recent first', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const first = await seedJob(tenantId);
+    await new Promise(r => setTimeout(r, 5));
+    const second = await seedJob(tenantId);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/spider',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = JSON.parse(res.body).jobs.map((j: any) => j.id);
+    expect(ids.indexOf(second)).toBeLessThan(ids.indexOf(first));
+  });
+
+  it('GET /api/v1/spider/:jobId — 404s for a job belonging to another tenant', async () => {
+    const { tenantId: otherTenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(otherTenantId);
+    const { token } = await registerAndGetToken(app);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/spider/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('POST /api/v1/spider/:jobId/cancel — stops a running job', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/spider/${jobId}/cancel`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).status).toBe('cancelled');
+  });
+
+  it('POST /api/v1/spider/:jobId/cancel — 400 if already finished', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'completed');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/spider/${jobId}/cancel`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('DELETE /api/v1/spider/:jobId — removes a finished job', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'failed');
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/spider/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(204);
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/spider/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(getRes.statusCode).toBe(404);
+  });
+
+  it('DELETE /api/v1/spider/:jobId — 400 while still running (must cancel first)', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId);
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/spider/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('viewer can list jobs but cannot cancel them', async () => {
+    const { token: ownerToken, tenantId } = await registerAndGetToken(app, { email: `spider-owner-${Date.now()}@example.com` });
+    const jobId = await seedJob(tenantId);
+
+    const invRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/invite',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { email: `spider-viewer-${Date.now()}@example.com`, name: 'Viewer', role: 'viewer' },
+    });
+    const { tempPassword, user } = JSON.parse(invRes.body);
+    const loginRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: user.email, password: tempPassword },
+    });
+    const { token: viewerToken } = JSON.parse(loginRes.body);
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/spider',
+      headers: { authorization: `Bearer ${viewerToken}` },
+    });
+    expect(listRes.statusCode).toBe(200);
+
+    const cancelRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/spider/${jobId}/cancel`,
+      headers: { authorization: `Bearer ${viewerToken}` },
+    });
+    expect(cancelRes.statusCode).toBe(403);
   });
 });
