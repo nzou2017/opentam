@@ -58,6 +58,7 @@ async function bootstrap(): Promise<void> {
   // gone (a crash or redeploy) — it can never finish, so surface that to
   // the user instead of leaving it stuck showing "running" forever.
   await getStore().failRunningCrawlJobs('Interrupted by a server restart');
+  await getStore().failRunningGithubCrawlJobs('Interrupted by a server restart');
 
   // Initialize license verification
   await initLicense();

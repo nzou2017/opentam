@@ -6,6 +6,12 @@ export interface GitHubFile {
   content: string; // decoded from base64
 }
 
+export interface FetchProgressHooks {
+  onTotal?: (total: number) => void | Promise<void>;
+  onFileProcessed?: (processed: number) => void | Promise<void>;
+  shouldCancel?: () => boolean | Promise<boolean>;
+}
+
 interface GitHubTreeItem {
   path: string;
   type: string;
@@ -111,6 +117,7 @@ export async function fetchRepoFiles(
   branch: string,
   accessToken?: string,
   srcPath = 'src',
+  hooks?: FetchProgressHooks,
 ): Promise<{ uiFiles: GitHubFile[]; docFiles: GitHubFile[] }> {
   const headers = buildHeaders(accessToken);
 
@@ -142,19 +149,28 @@ export async function fetchRepoFiles(
   const uiFiles: GitHubFile[] = [];
   const docFiles: GitHubFile[] = [];
 
+  await hooks?.onTotal?.(uiItems.length + docItems.length);
+  let processed = 0;
+
   // Fetch UI files
   for (const item of uiItems) {
+    if (await hooks?.shouldCancel?.()) return { uiFiles, docFiles };
     await sleep(FETCH_DELAY_MS);
     const file = await fetchBlob(item, headers);
     if (file) uiFiles.push(file);
     else if (!file && uiItems.indexOf(item) === uiItems.length - 1) break; // Rate limited
+    processed++;
+    await hooks?.onFileProcessed?.(processed);
   }
 
   // Fetch doc files
   for (const item of docItems) {
+    if (await hooks?.shouldCancel?.()) return { uiFiles, docFiles };
     await sleep(FETCH_DELAY_MS);
     const file = await fetchBlob(item, headers);
     if (file) docFiles.push(file);
+    processed++;
+    await hooks?.onFileProcessed?.(processed);
   }
 
   return { uiFiles, docFiles };

@@ -34,6 +34,37 @@ export interface CrawlJob {
   updatedAt: string;
 }
 
+export interface GithubCrawlCandidate {
+  feature: string;
+  url: string;
+  selector: string;
+  description: string;
+  source: 'crawler';
+}
+
+export interface GithubCrawlJob {
+  id: string;
+  tenantId: string;
+  repoUrl: string;
+  branch?: string | null;
+  srcPath?: string | null;
+  baseUrl?: string | null;
+  ingestDocs: boolean;
+  autoApply: boolean;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  totalFiles: number;
+  filesProcessed: number;
+  elementsFound: number;
+  docsIngested: number;
+  docsChunks: number;
+  applied: number;
+  appliedAt?: string | null;
+  candidates?: GithubCrawlCandidate[];
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TelemetryEventRecord {
   id: string;
   tenantId: string;
@@ -182,6 +213,14 @@ export interface Store {
   deleteCrawlJob(id: string): Promise<boolean>;
   /** Called once at startup — any job still 'running' belonged to a process that's gone, so it can never finish. */
   failRunningCrawlJobs(reason: string): Promise<void>;
+
+  // ── Crawl jobs (GitHub repo crawl) ───────────────────────────────────
+  createGithubCrawlJob(job: GithubCrawlJob): Promise<void>;
+  updateGithubCrawlJob(id: string, patch: Partial<Omit<GithubCrawlJob, 'id' | 'tenantId'>>): Promise<GithubCrawlJob | undefined>;
+  getGithubCrawlJob(id: string): Promise<GithubCrawlJob | undefined>;
+  getGithubCrawlJobsByTenantId(tenantId: string): Promise<GithubCrawlJob[]>;
+  deleteGithubCrawlJob(id: string): Promise<boolean>;
+  failRunningGithubCrawlJobs(reason: string): Promise<void>;
 
   // ── Integrations ─────────────────────────────────────────────────────
   getIntegrationsByTenantId(tenantId: string): Promise<Integration[]>;

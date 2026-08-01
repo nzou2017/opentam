@@ -141,6 +141,29 @@ export const crawlJobs = sqliteTable('crawl_jobs', {
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
 
+export const githubCrawlJobs = sqliteTable('github_crawl_jobs', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull().references(() => tenants.id),
+  repoUrl: text('repo_url').notNull(),
+  branch: text('branch'),
+  srcPath: text('src_path'),
+  baseUrl: text('base_url'),
+  ingestDocs: integer('ingest_docs', { mode: 'boolean' }).notNull().default(true),
+  autoApply: integer('auto_apply', { mode: 'boolean' }).notNull().default(false),
+  status: text('status', { enum: ['running', 'completed', 'failed', 'cancelled'] }).notNull().default('running'),
+  totalFiles: integer('total_files').notNull().default(0),
+  filesProcessed: integer('files_processed').notNull().default(0),
+  elementsFound: integer('elements_found').notNull().default(0),
+  docsIngested: integer('docs_ingested').notNull().default(0),
+  docsChunks: integer('docs_chunks').notNull().default(0),
+  applied: integer('applied').notNull().default(0),
+  appliedAt: text('applied_at'),
+  candidates: text('candidates'), // JSON array of GithubCrawlCandidate
+  error: text('error'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
 export const integrations = sqliteTable('integrations', {
   id: text('id').primaryKey(),
   tenantId: text('tenant_id').notNull().references(() => tenants.id),

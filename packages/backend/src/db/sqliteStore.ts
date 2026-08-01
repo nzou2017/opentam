@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { eq, and, sql, gte, like, desc } from 'drizzle-orm';
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
-import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob } from './store.js';
+import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob } from './store.js';
 import * as schema from './schema.js';
 import { encrypt, decrypt } from '../crypto.js';
 
@@ -184,6 +184,30 @@ export class SqliteStore implements Store {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE INDEX IF NOT EXISTS idx_crawl_jobs_tenant ON crawl_jobs(tenant_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS github_crawl_jobs (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        repo_url TEXT NOT NULL,
+        branch TEXT,
+        src_path TEXT,
+        base_url TEXT,
+        ingest_docs INTEGER NOT NULL DEFAULT 1,
+        auto_apply INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'running',
+        total_files INTEGER NOT NULL DEFAULT 0,
+        files_processed INTEGER NOT NULL DEFAULT 0,
+        elements_found INTEGER NOT NULL DEFAULT 0,
+        docs_ingested INTEGER NOT NULL DEFAULT 0,
+        docs_chunks INTEGER NOT NULL DEFAULT 0,
+        applied INTEGER NOT NULL DEFAULT 0,
+        applied_at TEXT,
+        candidates TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_github_crawl_jobs_tenant ON github_crawl_jobs(tenant_id, created_at);
 
       CREATE TABLE IF NOT EXISTS integration_triggers (
         id TEXT PRIMARY KEY,
@@ -840,6 +864,96 @@ export class SqliteStore implements Store {
     this.db.update(schema.crawlJobs)
       .set({ status: 'failed', error: reason, updatedAt: new Date().toISOString() })
       .where(eq(schema.crawlJobs.status, 'running')).run();
+  }
+
+  // ── Crawl jobs (GitHub repo crawl) ───────────────────────────────────
+
+  async createGithubCrawlJob(job: GithubCrawlJob): Promise<void> {
+    this.db.insert(schema.githubCrawlJobs).values({
+      id: job.id,
+      tenantId: job.tenantId,
+      repoUrl: job.repoUrl,
+      branch: job.branch ?? null,
+      srcPath: job.srcPath ?? null,
+      baseUrl: job.baseUrl ?? null,
+      ingestDocs: job.ingestDocs,
+      autoApply: job.autoApply,
+      status: job.status,
+      totalFiles: job.totalFiles,
+      filesProcessed: job.filesProcessed,
+      elementsFound: job.elementsFound,
+      docsIngested: job.docsIngested,
+      docsChunks: job.docsChunks,
+      applied: job.applied,
+      appliedAt: job.appliedAt ?? null,
+      candidates: job.candidates ? JSON.stringify(job.candidates) : null,
+      error: job.error ?? null,
+    }).run();
+  }
+
+  async updateGithubCrawlJob(id: string, patch: Partial<Omit<GithubCrawlJob, 'id' | 'tenantId'>>): Promise<GithubCrawlJob | undefined> {
+    const values: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    if (patch.status !== undefined) values.status = patch.status;
+    if (patch.totalFiles !== undefined) values.totalFiles = patch.totalFiles;
+    if (patch.filesProcessed !== undefined) values.filesProcessed = patch.filesProcessed;
+    if (patch.elementsFound !== undefined) values.elementsFound = patch.elementsFound;
+    if (patch.docsIngested !== undefined) values.docsIngested = patch.docsIngested;
+    if (patch.docsChunks !== undefined) values.docsChunks = patch.docsChunks;
+    if (patch.applied !== undefined) values.applied = patch.applied;
+    if (patch.appliedAt !== undefined) values.appliedAt = patch.appliedAt;
+    if (patch.candidates !== undefined) values.candidates = patch.candidates ? JSON.stringify(patch.candidates) : null;
+    if (patch.error !== undefined) values.error = patch.error;
+
+    this.db.update(schema.githubCrawlJobs).set(values).where(eq(schema.githubCrawlJobs.id, id)).run();
+    return this.getGithubCrawlJob(id);
+  }
+
+  async getGithubCrawlJob(id: string): Promise<GithubCrawlJob | undefined> {
+    const row = this.db.select().from(schema.githubCrawlJobs).where(eq(schema.githubCrawlJobs.id, id)).get();
+    return row ? this.toGithubCrawlJob(row) : undefined;
+  }
+
+  async getGithubCrawlJobsByTenantId(tenantId: string): Promise<GithubCrawlJob[]> {
+    const rows = this.db.select().from(schema.githubCrawlJobs)
+      .where(eq(schema.githubCrawlJobs.tenantId, tenantId))
+      .orderBy(desc(schema.githubCrawlJobs.createdAt)).all();
+    return rows.map(this.toGithubCrawlJob);
+  }
+
+  async deleteGithubCrawlJob(id: string): Promise<boolean> {
+    const result = this.db.delete(schema.githubCrawlJobs).where(eq(schema.githubCrawlJobs.id, id)).run();
+    return result.changes > 0;
+  }
+
+  async failRunningGithubCrawlJobs(reason: string): Promise<void> {
+    this.db.update(schema.githubCrawlJobs)
+      .set({ status: 'failed', error: reason, updatedAt: new Date().toISOString() })
+      .where(eq(schema.githubCrawlJobs.status, 'running')).run();
+  }
+
+  private toGithubCrawlJob(row: typeof schema.githubCrawlJobs.$inferSelect): GithubCrawlJob {
+    return {
+      id: row.id,
+      tenantId: row.tenantId,
+      repoUrl: row.repoUrl,
+      branch: row.branch ?? undefined,
+      srcPath: row.srcPath ?? undefined,
+      baseUrl: row.baseUrl ?? undefined,
+      ingestDocs: row.ingestDocs,
+      autoApply: row.autoApply,
+      status: row.status as GithubCrawlJob['status'],
+      totalFiles: row.totalFiles,
+      filesProcessed: row.filesProcessed,
+      elementsFound: row.elementsFound,
+      docsIngested: row.docsIngested,
+      docsChunks: row.docsChunks,
+      applied: row.applied,
+      appliedAt: row.appliedAt ?? undefined,
+      candidates: row.candidates ? JSON.parse(row.candidates) : undefined,
+      error: row.error ?? undefined,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
   }
 
   private toCrawlJob(row: typeof schema.crawlJobs.$inferSelect): CrawlJob {

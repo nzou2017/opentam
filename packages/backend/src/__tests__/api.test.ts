@@ -2459,3 +2459,174 @@ describe('Crawl Jobs (docs spider management)', () => {
     expect(cancelRes.statusCode).toBe(403);
   });
 });
+
+// ─────────────────────────────────────────────────
+// GitHub Crawl Jobs — same job-status/cancel/delete model as the docs
+// spider, plus an "apply" endpoint to commit already-fetched candidates
+// without re-crawling. Jobs are seeded directly via the store rather than
+// through POST /api/v1/crawl/jobs, which would hit the real GitHub API.
+// ─────────────────────────────────────────────────
+describe('GitHub Crawl Jobs', () => {
+  async function seedJob(
+    tenantId: string,
+    status: 'running' | 'completed' | 'failed' | 'cancelled' = 'running',
+    candidates: any[] = [],
+  ) {
+    const id = `ghjob-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await getStore().createGithubCrawlJob({
+      id,
+      tenantId,
+      repoUrl: 'https://github.com/acme/widgets',
+      ingestDocs: true,
+      autoApply: false,
+      status,
+      totalFiles: 0,
+      filesProcessed: 0,
+      elementsFound: 0,
+      docsIngested: 0,
+      docsChunks: 0,
+      applied: 0,
+      candidates: status === 'completed' ? candidates : undefined,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return id;
+  }
+
+  it('GET /api/v1/crawl/jobs — lists jobs for the tenant, most recent first', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const first = await seedJob(tenantId);
+    await new Promise(r => setTimeout(r, 5));
+    const second = await seedJob(tenantId);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/crawl/jobs',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = JSON.parse(res.body).jobs.map((j: any) => j.id);
+    expect(ids.indexOf(second)).toBeLessThan(ids.indexOf(first));
+  });
+
+  it('GET /api/v1/crawl/jobs/:jobId — 404s for a job belonging to another tenant', async () => {
+    const { tenantId: otherTenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(otherTenantId);
+    const { token } = await registerAndGetToken(app);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/crawl/jobs/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('POST /api/v1/crawl/jobs/:jobId/cancel — stops a running job', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/crawl/jobs/${jobId}/cancel`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).status).toBe('cancelled');
+  });
+
+  it('POST /api/v1/crawl/jobs/:jobId/cancel — 400 if already finished', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'completed');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/crawl/jobs/${jobId}/cancel`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST /api/v1/crawl/jobs/:jobId/apply — applies stored candidates without re-crawling', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'completed', [
+      { feature: 'Login button', url: '/login', selector: '#login-btn', description: 'Signs the user in', source: 'crawler' },
+      { feature: 'Signup link', url: '/signup', selector: '#signup-link', description: 'Goes to signup', source: 'crawler' },
+    ]);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/crawl/jobs/${jobId}/apply`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.applied).toBe(2);
+    expect(body.appliedAt).toBeDefined();
+
+    const entries = await getStore().getMapEntriesByTenantId(tenantId);
+    expect(entries.some((e) => e.feature === 'Login button')).toBe(true);
+  });
+
+  it('POST /api/v1/crawl/jobs/:jobId/apply — 400 if already applied', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'completed', [
+      { feature: 'X', url: '/x', selector: '#x', description: 'x', source: 'crawler' },
+    ]);
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/v1/crawl/jobs/${jobId}/apply`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/crawl/jobs/${jobId}/apply`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST /api/v1/crawl/jobs/:jobId/apply — 400 while still running', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'running');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/crawl/jobs/${jobId}/apply`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('DELETE /api/v1/crawl/jobs/:jobId — removes a finished job', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'failed');
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/crawl/jobs/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(204);
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/crawl/jobs/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(getRes.statusCode).toBe(404);
+  });
+
+  it('DELETE /api/v1/crawl/jobs/:jobId — 400 while still running (must cancel first)', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId);
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/crawl/jobs/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});

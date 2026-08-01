@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
-import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob } from './store.js';
+import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob } from './store.js';
 
 class InMemoryStore implements Store {
   _needsAdminHash = false;
@@ -26,6 +26,7 @@ class InMemoryStore implements Store {
   private passwordResetTokensMap: Map<string, { userId: string; expiresAt: string }> = new Map();
   private teamInvitesMap: Map<string, TeamInvite> = new Map();
   private crawlJobsMap: Map<string, CrawlJob> = new Map();
+  private githubCrawlJobsMap: Map<string, GithubCrawlJob> = new Map();
   private auditLogsList: AuditLogEntry[] = [];
   private surveysMap: Map<string, SurveyDefinition> = new Map();
   private surveyResponsesList: SurveyResponse[] = [];
@@ -493,6 +494,44 @@ class InMemoryStore implements Store {
 
   async failRunningCrawlJobs(reason: string): Promise<void> {
     for (const job of this.crawlJobsMap.values()) {
+      if (job.status === 'running') {
+        job.status = 'failed';
+        job.error = reason;
+        job.updatedAt = new Date().toISOString();
+      }
+    }
+  }
+
+  // ── Crawl jobs (GitHub repo crawl) ───────────────────────────────────
+
+  async createGithubCrawlJob(job: GithubCrawlJob): Promise<void> {
+    this.githubCrawlJobsMap.set(job.id, job);
+  }
+
+  async updateGithubCrawlJob(id: string, patch: Partial<Omit<GithubCrawlJob, 'id' | 'tenantId'>>): Promise<GithubCrawlJob | undefined> {
+    const job = this.githubCrawlJobsMap.get(id);
+    if (!job) return undefined;
+    const updated = { ...job, ...patch, updatedAt: new Date().toISOString() };
+    this.githubCrawlJobsMap.set(id, updated);
+    return updated;
+  }
+
+  async getGithubCrawlJob(id: string): Promise<GithubCrawlJob | undefined> {
+    return this.githubCrawlJobsMap.get(id);
+  }
+
+  async getGithubCrawlJobsByTenantId(tenantId: string): Promise<GithubCrawlJob[]> {
+    return [...this.githubCrawlJobsMap.values()]
+      .filter(j => j.tenantId === tenantId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async deleteGithubCrawlJob(id: string): Promise<boolean> {
+    return this.githubCrawlJobsMap.delete(id);
+  }
+
+  async failRunningGithubCrawlJobs(reason: string): Promise<void> {
+    for (const job of this.githubCrawlJobsMap.values()) {
       if (job.status === 'running') {
         job.status = 'failed';
         job.error = reason;
