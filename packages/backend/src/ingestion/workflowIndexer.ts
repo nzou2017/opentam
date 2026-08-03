@@ -3,19 +3,16 @@
 
 import { ChromaClient } from 'chromadb';
 import type { Workflow, WorkflowStep } from '@opentam/shared';
-import { config } from '../config.js';
-import { embedTexts, embedQuery } from './embedder.js';
+import { embedTexts } from './embedder.js';
+import { resolveRagConfig } from './ragConfig.js';
 
 function collectionName(tenantId: string): string {
   return `q_workflows_${tenantId.replace(/[^a-z0-9_-]/gi, '_')}`;
 }
 
-function getClient(): ChromaClient {
-  return new ChromaClient({ path: config.chromaUrl });
-}
-
 async function getCollection(tenantId: string) {
-  const client = getClient();
+  const { chromaUrl } = await resolveRagConfig(tenantId);
+  const client = new ChromaClient({ path: chromaUrl });
   return client.getOrCreateCollection({
     name: collectionName(tenantId),
     metadata: { 'hnsw:space': 'cosine' },
@@ -63,7 +60,7 @@ export async function indexWorkflow(
     });
   }
 
-  const embeddings = await embedTexts(texts);
+  const embeddings = await embedTexts(texts, tenantId);
 
   // Upsert in batches of 100
   const BATCH = 100;

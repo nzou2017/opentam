@@ -33,7 +33,7 @@ export async function ingestText(
   if (chunks.length === 0) return { chunks: 0 };
 
   await ensureIndex();
-  const embeddings = await embedTexts(chunks);
+  const embeddings = await embedTexts(chunks, tenantId);
   await upsertChunks(tenantId, docId, chunks, embeddings);
 
   return { chunks: chunks.length };
@@ -60,7 +60,7 @@ export async function ingestBuffer(
   if (chunks.length === 0) return { chunks: 0 };
 
   await ensureIndex();
-  const embeddings = await embedTexts(chunks);
+  const embeddings = await embedTexts(chunks, tenantId);
   await upsertChunks(tenantId, docId, chunks, embeddings);
 
   return { chunks: chunks.length };

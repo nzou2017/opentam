@@ -330,20 +330,15 @@ export async function executeSearchDocs(
   input: { query: string },
   tenantId: string,
 ): Promise<string> {
-  const ragReady = config.embeddingProvider === 'ollama'
-    ? true
-    : config.embeddingProvider === 'minimax'
-      ? Boolean(config.minimaxApiKey)
-      : Boolean(config.openaiApiKey);
-
-  if (!ragReady) {
+  const { isRagConfiguredForTenant } = await import('../ingestion/ragConfig.js');
+  if (!(await isRagConfiguredForTenant(tenantId))) {
     return 'Documentation search is not configured.';
   }
 
   const { embedQuery } = await import('../ingestion/embedder.js');
   const { searchDocs } = await import('../ingestion/indexer.js');
 
-  const queryEmbedding = await embedQuery(input.query);
+  const queryEmbedding = await embedQuery(input.query, tenantId);
   const results = await searchDocs(tenantId, queryEmbedding);
 
   if (results.length === 0) {
@@ -362,13 +357,8 @@ export async function executeSearchWorkflows(
   input: { query: string; current_url?: string },
   tenantId: string,
 ): Promise<string> {
-  const ragReady = config.embeddingProvider === 'ollama'
-    ? true
-    : config.embeddingProvider === 'minimax'
-      ? Boolean(config.minimaxApiKey)
-      : Boolean(config.openaiApiKey);
-
-  if (!ragReady) {
+  const { isRagConfiguredForTenant } = await import('../ingestion/ragConfig.js');
+  if (!(await isRagConfiguredForTenant(tenantId))) {
     return 'Workflow search is not configured (no embedding provider).';
   }
 
@@ -376,7 +366,7 @@ export async function executeSearchWorkflows(
   const { searchWorkflows } = await import('../ingestion/workflowIndexer.js');
   const { getStore } = await import('../db/index.js');
 
-  const queryEmbedding = await embedQuery(input.query);
+  const queryEmbedding = await embedQuery(input.query, tenantId);
   const results = await searchWorkflows(tenantId, queryEmbedding);
 
   if (results.length === 0) {

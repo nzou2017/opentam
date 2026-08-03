@@ -23,7 +23,16 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - CHROMA_URL=http://chromadb:8000
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-openai}
+      # Ollama runs on the host, not as a compose service — "localhost" from
+      # inside this container means the container itself, so this must point
+      # at the Docker host bridge instead. Override with DOCKER_OLLAMA_URL if
+      # your .env's OLLAMA_URL (meant for non-Docker local dev) isn't right here.
+      - OLLAMA_URL=${DOCKER_OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       - PORT=3001
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - chromadb
     networks:

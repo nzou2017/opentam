@@ -2,29 +2,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { ChromaClient } from 'chromadb';
-import { config } from '../config.js';
+import { resolveRagConfig } from './ragConfig.js';
 
 // Collection per tenant: q_tenant_{tenantId}
-// Override with CHROMA_COLLECTION env var to point at a pre-existing index.
-// ChromaDB names must be 3-63 chars, alphanumeric + underscores/hyphens
-function collectionName(tenantId: string): string {
-  if (config.chromaCollection) return config.chromaCollection;
+// Tenants can override the collection name in Settings > Model to point at
+// a pre-existing index. ChromaDB names must be 3-63 chars, alphanumeric +
+// underscores/hyphens.
+function collectionName(tenantId: string, chromaCollection: string): string {
+  if (chromaCollection) return chromaCollection;
   return `q_tenant_${tenantId.replace(/[^a-z0-9_-]/gi, '_')}`;
 }
 
-function getClient(): ChromaClient {
-  return new ChromaClient({ path: config.chromaUrl });
-}
-
 async function getCollection(tenantId: string) {
-  const client = getClient();
+  const { chromaUrl, chromaCollection } = await resolveRagConfig(tenantId);
+  const client = new ChromaClient({ path: chromaUrl });
   // Use getCollection (not getOrCreateCollection) when pointing at an existing index
   // so Q doesn't silently create an empty collection if the name is wrong.
-  if (config.chromaCollection) {
-    return client.getCollection({ name: config.chromaCollection });
+  if (chromaCollection) {
+    return client.getCollection({ name: chromaCollection });
   }
   return client.getOrCreateCollection({
-    name: collectionName(tenantId),
+    name: collectionName(tenantId, chromaCollection),
     metadata: { 'hnsw:space': 'cosine' },
   });
 }

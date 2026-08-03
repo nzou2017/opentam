@@ -74,7 +74,7 @@ function getSystemPrompt(platform: Platform): string {
   }
 }
 
-function buildUserMessage(event: FrustrationEvent, entries: FunctionalMapEntry[], platform: Platform): string {
+async function buildUserMessage(event: FrustrationEvent, entries: FunctionalMapEntry[], platform: Platform): Promise<string> {
   const isWeb = platform === 'web';
   const signals = [
     event.signals.rageClicks > 0 && `${isWeb ? 'rage clicks' : 'rapid taps'}: ${event.signals.rageClicks}`,
@@ -88,11 +88,14 @@ function buildUserMessage(event: FrustrationEvent, entries: FunctionalMapEntry[]
   const locationLabel = isWeb ? 'Current URL' : 'Current screen';
   const snapshotLabel = isWeb ? 'DOM snapshot' : 'View hierarchy';
 
+  const { isRagConfiguredForTenant } = await import('../ingestion/ragConfig.js');
+  const docsAvailable = await isRagConfiguredForTenant(event.tenantId);
+
   return `Frustration event:
 - ${locationLabel}: ${event.currentUrl}${event.screenName ? ` (${event.screenName})` : ''}
 - Signals: ${signals}
 - ${snapshotLabel}: ${event.domSnapshot}
-- Documentation search: ${config.openaiApiKey ? 'available (call search_docs)' : 'not configured'}
+- Documentation search: ${docsAvailable ? 'available (call search_docs)' : 'not configured'}
 
 Available functional map (${entries.length} entries):
 ${JSON.stringify(entries, null, 2)}
@@ -122,7 +125,7 @@ export async function runInterventionAgent(
   const toolDefs = getToolDefinitions(platform);
 
   const messages: Anthropic.MessageParam[] = [
-    { role: 'user', content: buildUserMessage(event, entries, platform) },
+    { role: 'user', content: await buildUserMessage(event, entries, platform) },
   ];
 
   const MAX_ITERATIONS = 5;

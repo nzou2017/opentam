@@ -5,6 +5,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, SDK_KEY, SECRET_KEY, TENANT_ID, Q_ADMIN_SDK_KEY, Q_ADMIN_SECRET_KEY, Q_ADMIN_TENANT_ID, registerAndGetToken } from './setup.js';
 import { getStore } from '../db/index.js';
+import { config } from '../config.js';
+import { resolveRagConfig, isRagConfiguredForTenant } from '../ingestion/ragConfig.js';
 
 let app: FastifyInstance;
 
@@ -2628,5 +2630,68 @@ describe('GitHub Crawl Jobs', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+// ─────────────────────────────────────────────────
+// Per-Tenant RAG Config — Settings > Model previously saved these fields
+// but nothing in the ingest/search pipeline ever read them back, so every
+// tenant silently shared the deployment-wide .env config regardless of what
+// they configured. These test the resolution/fallback logic itself, not
+// live embedding calls, so they stay deterministic regardless of what the
+// deployment's own .env happens to have configured.
+// ─────────────────────────────────────────────────
+describe('Per-Tenant RAG Config', () => {
+  it('falls back to the deployment config when a tenant has no overrides set', async () => {
+    const { tenantId } = await registerAndGetToken(app);
+    const cfg = await resolveRagConfig(tenantId);
+    expect(cfg.embeddingProvider).toBe(config.embeddingProvider);
+    expect(cfg.openaiApiKey).toBe(config.openaiApiKey);
+    expect(cfg.ollamaUrl).toBe(config.ollamaUrl);
+    expect(cfg.chromaUrl).toBe(config.chromaUrl);
+  });
+
+  it('prefers a tenant-configured embedding provider and key over the deployment default', async () => {
+    const { tenantId } = await registerAndGetToken(app);
+    await getStore().updateTenantSettings(tenantId, {
+      embeddingProvider: 'openai',
+      openaiApiKey: 'sk-tenant-specific-test-key',
+    });
+
+    const cfg = await resolveRagConfig(tenantId);
+    expect(cfg.embeddingProvider).toBe('openai');
+    expect(cfg.openaiApiKey).toBe('sk-tenant-specific-test-key');
+  });
+
+  it('prefers a tenant-configured Ollama URL and Chroma settings over the deployment default', async () => {
+    const { tenantId } = await registerAndGetToken(app);
+    await getStore().updateTenantSettings(tenantId, {
+      embeddingProvider: 'ollama',
+      ollamaUrl: 'http://tenant-ollama.internal:11434',
+      ollamaEmbeddingModel: 'tenant-model',
+      chromaUrl: 'http://tenant-chroma.internal:8000',
+      chromaCollection: 'tenant_custom_collection',
+    });
+
+    const cfg = await resolveRagConfig(tenantId);
+    expect(cfg.ollamaUrl).toBe('http://tenant-ollama.internal:11434');
+    expect(cfg.ollamaEmbeddingModel).toBe('tenant-model');
+    expect(cfg.chromaUrl).toBe('http://tenant-chroma.internal:8000');
+    expect(cfg.chromaCollection).toBe('tenant_custom_collection');
+  });
+
+  it('reports configured once a tenant sets Ollama as their provider, regardless of the deployment default', async () => {
+    const { tenantId } = await registerAndGetToken(app);
+    await getStore().updateTenantSettings(tenantId, { embeddingProvider: 'ollama' });
+    expect(await isRagConfiguredForTenant(tenantId)).toBe(true);
+  });
+
+  it('MiniMax has no per-tenant credential override — always uses the deployment key', async () => {
+    const { tenantId } = await registerAndGetToken(app);
+    await getStore().updateTenantSettings(tenantId, { embeddingProvider: 'minimax' });
+
+    const cfg = await resolveRagConfig(tenantId);
+    expect(cfg.minimaxApiKey).toBe(config.minimaxApiKey);
+    expect(cfg.minimaxGroupId).toBe(config.minimaxGroupId);
   });
 });

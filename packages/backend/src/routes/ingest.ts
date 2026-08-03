@@ -3,18 +3,10 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { config } from '../config.js';
 import { ingestText, ingestUrl } from '../ingestion/pipeline.js';
 import { deleteDoc, listDocs } from '../ingestion/indexer.js';
+import { isRagConfiguredForTenant } from '../ingestion/ragConfig.js';
 import type { AuthenticatedRequest } from '../middleware/auth.js';
-
-function isRagConfigured(): boolean {
-  switch (config.embeddingProvider) {
-    case 'minimax': return Boolean(config.minimaxApiKey);
-    case 'ollama':  return true;
-    default:        return Boolean(config.openaiApiKey);
-  }
-}
 
 const IngestUrlBody = z.object({
   url: z.string().url(),
@@ -33,7 +25,7 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: 'Missing or invalid credentials' });
     }
 
-    if (!isRagConfigured()) {
+    if (!(await isRagConfiguredForTenant(tenant.id))) {
       return reply.code(200).send({ error: 'RAG not configured', configured: false });
     }
 
@@ -60,7 +52,7 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: 'Missing or invalid credentials' });
     }
 
-    if (!isRagConfigured()) {
+    if (!(await isRagConfiguredForTenant(tenant.id))) {
       return reply.code(200).send({ error: 'RAG not configured', configured: false });
     }
 
@@ -87,7 +79,7 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: 'Missing or invalid credentials' });
     }
 
-    if (!isRagConfigured()) {
+    if (!(await isRagConfiguredForTenant(tenant.id))) {
       return reply.code(200).send({ docs: [], configured: false });
     }
 
@@ -107,7 +99,7 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: 'Missing or invalid credentials' });
     }
 
-    if (!isRagConfigured()) {
+    if (!(await isRagConfiguredForTenant(tenant.id))) {
       return reply.code(200).send({ error: 'RAG not configured', configured: false });
     }
 
