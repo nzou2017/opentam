@@ -64,7 +64,7 @@ export async function crawlGitHubRepo(
   } : undefined);
 
   if (await isCancelled()) {
-    return { candidates: [], filesProcessed: uiFiles.length, elementsFound: 0, docsIngested: 0, docsChunks: 0 };
+    return { candidates: [], filesProcessed: uiFiles.length + docFiles.length, elementsFound: 0, docsIngested: 0, docsChunks: 0 };
   }
 
   const allElements = uiFiles.flatMap((file) => extractUiElements(file.content, file.path));
@@ -90,7 +90,9 @@ export async function crawlGitHubRepo(
 
   return {
     candidates,
-    filesProcessed: uiFiles.length,
+    // Total files actually fetched (UI + doc), matching what was live-tracked
+    // during the run — not just the subset that happened to be UI candidates.
+    filesProcessed: uiFiles.length + docFiles.length,
     elementsFound: allElements.length,
     docsIngested,
     docsChunks,

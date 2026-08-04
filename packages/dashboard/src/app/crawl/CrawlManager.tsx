@@ -338,6 +338,14 @@ export function CrawlManager() {
                     </p>
                   )}
 
+                  {job.status === 'completed' && job.elementsFound === 0 && job.filesProcessed > 0 && (
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-500">
+                      No UI candidates found because this crawler only extracts them from React (.tsx/.jsx)
+                      source files under the configured source path — it doesn't parse Swift, Kotlin, or other
+                      non-React UI code. Docs were still ingested for search above, if any were found.
+                    </p>
+                  )}
+
                   {job.error && (
                     <p className="mt-1 text-sm text-red-600 dark:text-red-400">Error: {job.error}</p>
                   )}
