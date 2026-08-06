@@ -170,8 +170,19 @@ final class QTransport {
     }
 }
 
-enum QTransportError: Error {
+public enum QTransportError: Error, LocalizedError {
     case invalidURL
     case httpError(statusCode: Int)
     case offline
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return "Invalid backend URL"
+        case .httpError(let code):
+            return "HTTP \(code)"
+        case .offline:
+            return "No network connection"
+        }
+    }
 }
