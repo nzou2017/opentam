@@ -61,6 +61,7 @@ export default function FeatureRequestsPage() {
   const [items, setItems] = useState<FeatureRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [licensed, setLicensed] = useState<boolean | null>(null);
+  const [detailItem, setDetailItem] = useState<FeatureRequest | null>(null);
 
   // New form state
   const [showForm, setShowForm] = useState(false);
@@ -71,10 +72,15 @@ export default function FeatureRequestsPage() {
   const [duplicates, setDuplicates] = useState<FeatureRequest[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Token from httpOnly session cookie
+  // Token from httpOnly session cookie. tokenChecked distinguishes "haven't
+  // asked yet" from "asked, and there isn't one" — without it, the fetch
+  // below fires once immediately on mount with token still null (before
+  // getClientToken() resolves), sending an unauthenticated request that
+  // 401s before a second, authenticated attempt quietly succeeds.
   const [token, setToken] = useState<string | null>(null);
+  const [tokenChecked, setTokenChecked] = useState(false);
   useEffect(() => {
-    getClientToken().then(t => setToken(t || null));
+    getClientToken().then(t => { setToken(t || null); setTokenChecked(true); });
   }, []);
 
   // License check
@@ -86,6 +92,7 @@ export default function FeatureRequestsPage() {
   }, [token]);
 
   const loadItems = useCallback(async () => {
+    if (!tokenChecked) return;
     setLoading(true);
     try {
       const data = await getFeatureRequests(token, activeTab);
@@ -95,7 +102,7 @@ export default function FeatureRequestsPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, token]);
+  }, [activeTab, token, tokenChecked]);
 
   useEffect(() => {
     loadItems();
@@ -356,8 +363,9 @@ export default function FeatureRequestsPage() {
           searchPlaceholder="Search feedback..."
           emptyMessage="No feedback items found."
           pageSize={20}
+          onRowClick={(r) => setDetailItem(r)}
           actions={(r) => (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
               {token && (
                 <>
                   <select
@@ -385,6 +393,51 @@ export default function FeatureRequestsPage() {
             </div>
           )}
         />
+      )}
+
+      {/* Detail view — the table row truncates description to one line, so
+          this is the only place the full text (including any structured
+          "What happened / Steps to reproduce / ..." sections Q's chat agent
+          writes) is actually visible. */}
+      {detailItem && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setDetailItem(null)}
+        >
+          <div
+            className="w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-6 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{detailItem.title}</h2>
+              <button
+                onClick={() => setDetailItem(null)}
+                aria-label="Close"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${statusColors[detailItem.status]}`}>
+                {detailItem.status.replace('_', ' ')}
+              </span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {tabs.find(t => t.type === detailItem.type)?.label ?? detailItem.type}
+              </span>
+              <span className="text-xs text-gray-400 dark:text-gray-500">
+                {new Date(detailItem.createdAt).toLocaleString()}
+              </span>
+            </div>
+
+            <p className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">{detailItem.description}</p>
+
+            <p className="mt-4 text-xs text-gray-400 dark:text-gray-500">
+              Submitted by {detailItem.submittedByEmail ?? detailItem.submittedBy} · {detailItem.votes} vote{detailItem.votes === 1 ? '' : 's'}
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );

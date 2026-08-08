@@ -12,7 +12,7 @@ import { fireIntegrationEvent } from '../integrations/bus.js';
 
 const PlatformSchema = z.enum(['web', 'ios', 'android']);
 
-const DeviceInfoSchema = z.object({
+export const DeviceInfoSchema = z.object({
   model: z.string(),
   os: z.string(),
   screenSize: z.string(),

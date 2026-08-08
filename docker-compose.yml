@@ -17,6 +17,18 @@ services:
       - '3001:3001'
     volumes:
       - q_data:/app/data
+    # Loads every var from the root .env as-is (only vars actually present
+    # in the file get set) — this is what makes LLM_PROVIDER/LLM_API_KEY/
+    # LLM_BASE_URL/GEMINI_*/MINIMAX_*/STT_* etc. (config.ts's provider
+    # config, previously not wired into this container at all) available,
+    # while preserving config.ts's own `??` fallback chains between them
+    # (e.g. LLM_API_KEY ?? MINIMAX_API_KEY ?? OPENAI_API_KEY). Explicitly
+    # listing each var instead, as `KEY=${KEY}`, would force-set every
+    # unset one to an empty string rather than leaving it absent — which
+    # breaks those fallback chains (`'' ?? x` stops at `''`, it doesn't
+    # fall through to `x` the way `undefined ?? x` does).
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=file:./data/q.db
       - JWT_SECRET=${JWT_SECRET:-q-dev-secret-change-me}
@@ -25,8 +37,6 @@ services:
       # random key on the container's own ephemeral filesystem otherwise,
       # which silently orphans previously-encrypted data on every rebuild.
       - Q_ENCRYPTION_KEY=${Q_ENCRYPTION_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - CHROMA_URL=http://chromadb:8000
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-openai}
       # Ollama runs on the host, not as a compose service — "localhost" from

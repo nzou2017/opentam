@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import Anthropic from '@anthropic-ai/sdk';
-import type { FunctionalMapEntry, InterventionCommand, Platform } from '@opentam/shared';
+import type { FunctionalMapEntry, InterventionCommand, Platform, DeviceInfo } from '@opentam/shared';
 import { config } from '../config.js';
 import { getStore } from '../db/index.js';
 import { getToolDefinitions, executeLookup, executeSearchDocs, executeSearchWorkflows, executeSubmitFeedback, parseIntervention } from './tools.js';
+import type { FeedbackContext } from './tools.js';
 import { runChatAgentOpenAI } from './chatAgentOpenAI.js';
 
 const INTERVENTION_TOOL_NAMES = new Set(['highlight_element', 'deep_link', 'show_message', 'create_tour']);
@@ -17,11 +18,14 @@ STRICT SCOPE — you MUST refuse any request that falls outside product guidance
 - Do NOT write code, scripts, queries, or any programming content.
 - Do NOT answer general knowledge questions, math, trivia, or anything unrelated to the product.
 - Do NOT act as a general-purpose AI assistant.
+- Never explain technical root causes, source code, internal architecture, or why a bug/error happened at an implementation level — you don't have visibility into that. If asked, say something like: "I don't have visibility into what's causing that, but I can log it for the team to investigate — want me to file a bug report?" Never speculate.
 - If a request is out of scope, reply: "I can only help with navigating and using this application. What can I help you find?"
 
 You can also help users submit feedback:
 - Use submit_feedback when a user wants to report a bug, request a feature, or share positive feedback.
-- Ask clarifying questions to form a clear title and description before submitting.
+- Bug reports: before filing, make sure you understand what happened, when/how it happens, and steps to reproduce. If the message is missing this, ask ONE targeted follow-up covering the biggest gap — not a checklist. If they already gave enough, or brush off a follow-up ("just log it"), file immediately. Never ask more than one follow-up.
+- Feature requests: before filing, understand why they want it (their use case) and what they do today instead, if relevant. Same rule — at most one follow-up, skip if already explained or brushed off.
+- When filing, write description as clear plain-text sections separated by blank lines: for bugs, "What happened / Steps to reproduce / Expected vs actual"; for features, "Request / Use case / Current workaround". Screen/URL/app/device context is attached automatically — never ask the user for it.
 - After submitting, confirm to the user that their feedback was recorded.
 
 Answer the user's question using search_docs, lookup_functional_map, and search_workflows as needed.
@@ -45,11 +49,14 @@ STRICT SCOPE — you MUST refuse any request that falls outside product guidance
 - Do NOT write code, scripts, queries, or any programming content.
 - Do NOT answer general knowledge questions, math, trivia, or anything unrelated to the product.
 - Do NOT act as a general-purpose AI assistant.
+- Never explain technical root causes, source code, internal architecture, or why a bug/error happened at an implementation level — you don't have visibility into that. If asked, say something like: "I don't have visibility into what's causing that, but I can log it for the team to investigate — want me to file a bug report?" Never speculate.
 - If a request is out of scope, reply: "I can only help with navigating and using this application. What can I help you find?"
 
 You can also help users submit feedback:
 - Use submit_feedback when a user wants to report a bug, request a feature, or share positive feedback.
-- Ask clarifying questions to form a clear title and description before submitting.
+- Bug reports: before filing, make sure you understand what happened, when/how it happens, and steps to reproduce. If the message is missing this, ask ONE targeted follow-up covering the biggest gap — not a checklist. If they already gave enough, or brush off a follow-up ("just log it"), file immediately. Never ask more than one follow-up.
+- Feature requests: before filing, understand why they want it (their use case) and what they do today instead, if relevant. Same rule — at most one follow-up, skip if already explained or brushed off.
+- When filing, write description as clear plain-text sections separated by blank lines: for bugs, "What happened / Steps to reproduce / Expected vs actual"; for features, "Request / Use case / Current workaround". Screen/URL/app/device context is attached automatically — never ask the user for it.
 - After submitting, confirm to the user that their feedback was recorded.
 
 Answer the user's question using search_docs, lookup_functional_map, and search_workflows as needed.
@@ -74,11 +81,14 @@ STRICT SCOPE — you MUST refuse any request that falls outside product guidance
 - Do NOT write code, scripts, queries, or any programming content.
 - Do NOT answer general knowledge questions, math, trivia, or anything unrelated to the product.
 - Do NOT act as a general-purpose AI assistant.
+- Never explain technical root causes, source code, internal architecture, or why a bug/error happened at an implementation level — you don't have visibility into that. If asked, say something like: "I don't have visibility into what's causing that, but I can log it for the team to investigate — want me to file a bug report?" Never speculate.
 - If a request is out of scope, reply: "I can only help with navigating and using this application. What can I help you find?"
 
 You can also help users submit feedback:
 - Use submit_feedback when a user wants to report a bug, request a feature, or share positive feedback.
-- Ask clarifying questions to form a clear title and description before submitting.
+- Bug reports: before filing, make sure you understand what happened, when/how it happens, and steps to reproduce. If the message is missing this, ask ONE targeted follow-up covering the biggest gap — not a checklist. If they already gave enough, or brush off a follow-up ("just log it"), file immediately. Never ask more than one follow-up.
+- Feature requests: before filing, understand why they want it (their use case) and what they do today instead, if relevant. Same rule — at most one follow-up, skip if already explained or brushed off.
+- When filing, write description as clear plain-text sections separated by blank lines: for bugs, "What happened / Steps to reproduce / Expected vs actual"; for features, "Request / Use case / Current workaround". Screen/URL/app/device context is attached automatically — never ask the user for it.
 - After submitting, confirm to the user that their feedback was recorded.
 
 Answer the user's question using search_docs, lookup_functional_map, and search_workflows as needed.
@@ -113,7 +123,12 @@ export async function runChatAgent(
   history?: { role: 'user' | 'assistant'; content: string }[],
   platform: Platform = 'web',
   domSnapshot?: string,
+  screenName?: string,
+  appVersion?: string,
+  deviceInfo?: DeviceInfo,
 ): Promise<{ reply: string; intervention?: InterventionCommand }> {
+  const feedbackContext: FeedbackContext = { platform, currentUrl, screenName, appVersion, deviceInfo };
+
   // Resolve per-tenant provider config
   const store = getStore();
   const tenantSettings = await store.getTenantSettings(tenantId);
@@ -126,7 +141,7 @@ export async function runChatAgent(
     return runChatAgentOpenAI(message, tenantId, currentUrl, entries, geminiModel, {
       baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
       apiKey: tenantSettings?.llmApiKey ?? config.geminiApiKey,
-    }, history, platform, domSnapshot);
+    }, history, platform, domSnapshot, feedbackContext);
   }
 
   // OpenAI-compatible (also handles 'minimax' which uses the same OpenAI-compatible path)
@@ -135,7 +150,7 @@ export async function runChatAgent(
     return runChatAgentOpenAI(message, tenantId, currentUrl, entries, openaiModel, {
       baseURL: tenantSettings?.llmBaseUrl ?? config.llmBaseUrl,
       apiKey: tenantSettings?.llmApiKey ?? config.llmApiKey,
-    }, history, platform, domSnapshot);
+    }, history, platform, domSnapshot, feedbackContext);
   }
 
   // Anthropic (default)
@@ -219,7 +234,7 @@ User question: ${message}`;
         const result = executeLookup(input as { query: string }, entries);
         toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
       } else if (block.name === 'submit_feedback') {
-        const result = await executeSubmitFeedback(input as { type: string; title: string; description: string }, tenantId);
+        const result = await executeSubmitFeedback(input as { type: string; title: string; description: string }, tenantId, feedbackContext);
         toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
       } else if (INTERVENTION_TOOL_NAMES.has(block.name)) {
         if (!intervention) {

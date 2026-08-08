@@ -183,7 +183,13 @@ export async function runInterventionAgent(
         const result = await executeSearchWorkflows(input as { query: string; current_url?: string }, event.tenantId);
         toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
       } else if (toolName === 'submit_feedback') {
-        const result = await executeSubmitFeedback(input as { type: string; title: string; description: string }, event.tenantId);
+        const result = await executeSubmitFeedback(input as { type: string; title: string; description: string }, event.tenantId, {
+          platform,
+          currentUrl: event.currentUrl,
+          screenName: event.screenName,
+          appVersion: event.appVersion,
+          deviceInfo: event.deviceInfo,
+        });
         toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
       }
     }

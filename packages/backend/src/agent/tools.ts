@@ -3,8 +3,17 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 import type OpenAI from 'openai';
-import type { FunctionalMapEntry, Platform } from '@opentam/shared';
+import type { FunctionalMapEntry, Platform, DeviceInfo } from '@opentam/shared';
 import { config } from '../config.js';
+
+/** Context auto-attached to filed feedback — whatever the client sent on this chat request, not asked of the user. */
+export interface FeedbackContext {
+  platform?: Platform;
+  currentUrl?: string;
+  screenName?: string;
+  appVersion?: string;
+  deviceInfo?: DeviceInfo;
+}
 
 export type ToolName = 'lookup_functional_map' | 'search_docs' | 'search_workflows' | 'highlight_element' | 'deep_link' | 'show_message' | 'create_tour' | 'submit_feedback';
 
@@ -156,7 +165,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   },
   {
     name: 'submit_feedback',
-    description: 'Submit a feature request, bug report, or positive feedback on behalf of the user. Use when the user wants to report an issue, request a new feature, or share positive feedback about the product.',
+    description: 'Submit a feature request, bug report, or positive feedback on behalf of the user. Use when the user wants to report an issue, request a new feature, or share positive feedback about the product. Screen/URL/app/device context is attached automatically — never ask the user for it.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -391,9 +400,23 @@ ${steps.map(s => `  ${s.stepIndex + 1}. [${s.action}] ${s.contextHint} (url: ${s
   return output.join('\n\n');
 }
 
+/** Formats whatever context fields are present into a footer appended to the filed description — never asked of the user, just whatever the client already sent on this chat request. */
+function formatContextFooter(context?: FeedbackContext): string {
+  if (!context) return '';
+  const lines: string[] = [];
+  if (context.platform) lines.push(`Platform: ${context.platform}`);
+  if (context.screenName) lines.push(`Screen: ${context.screenName}`);
+  if (context.currentUrl) lines.push(`URL: ${context.currentUrl}`);
+  if (context.appVersion) lines.push(`App version: ${context.appVersion}`);
+  if (context.deviceInfo) lines.push(`Device: ${context.deviceInfo.model} (${context.deviceInfo.os}, ${context.deviceInfo.screenSize})`);
+  if (lines.length === 0) return '';
+  return `\n\n---\nContext:\n${lines.join('\n')}`;
+}
+
 export async function executeSubmitFeedback(
   input: { type: string; title: string; description: string },
   tenantId: string,
+  context?: FeedbackContext,
 ): Promise<string> {
   // Block feedback submission for Q admin tenant unless testing mode is enabled
   if (tenantId === 'tenant-q-admin' && !config.testingMode) {
@@ -420,7 +443,7 @@ export async function executeSubmitFeedback(
     tenantId,
     type: feedbackType,
     title: input.title.slice(0, 100),
-    description: input.description,
+    description: input.description + formatContextFooter(context),
     status: 'new',
     votes: 0,
     submittedBy: 'q-chat-agent',
