@@ -33,9 +33,9 @@ const MAX_FILES = 80;
 const MAX_DOC_FILES = 50;
 const FETCH_DELAY_MS = 50;
 
-const UI_EXTENSIONS = ['.tsx', '.jsx'];
+const UI_EXTENSIONS = ['.tsx', '.jsx', '.swift'];
 const DOC_EXTENSIONS = ['.md', '.mdx'];
-const SKIP_PATTERNS = ['.test.', '.spec.', '.stories.'];
+const SKIP_PATTERNS = ['.test.', '.spec.', '.stories.', 'Tests.swift', 'UITests.swift'];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -58,6 +58,14 @@ function isUiFile(path: string, srcPath: string): boolean {
 
   const hasSkipPattern = SKIP_PATTERNS.some((pat) => path.includes(pat));
   if (hasSkipPattern) return false;
+
+  // The srcPath restriction assumes a JS/TS-style layout (default "src").
+  // Xcode/SwiftUI projects almost never use a "src/" directory — they're
+  // laid out per-target (e.g. "Ledgrify/Views/...") — so requiring a
+  // matching srcPath would silently filter out every .swift file unless
+  // the user happens to type their exact target folder name. Scan Swift
+  // files repo-wide instead, same as docs already do.
+  if (path.endsWith('.swift')) return true;
 
   return path.startsWith(srcPath + '/') || path.startsWith(srcPath);
 }
@@ -96,7 +104,7 @@ export function parseGitHubUrl(url: string): {
 }
 
 async function fetchBlob(item: GitHubTreeItem, headers: Record<string, string>): Promise<GitHubFile | null> {
-  const blobRes = await fetch(item.url, { headers });
+  const blobRes = await fetch(item.url, { headers, signal: AbortSignal.timeout(15000) });
 
   if (blobRes.status === 403) return null; // Rate limited
   if (!blobRes.ok) return null;
@@ -109,7 +117,10 @@ async function fetchBlob(item: GitHubTreeItem, headers: Record<string, string>):
 }
 
 /**
- * Fetch the file tree for a repo and return decoded content for UI and doc files.
+ * Fetch the file tree for a repo and return decoded content for UI and doc
+ * files. The tree listing itself is always fetched fresh (cheap, one API
+ * call) — `skipPaths` filters out items already fetched by a prior run of
+ * the same job, so a resumed crawl only re-fetches what's left.
  */
 export async function fetchRepoFiles(
   owner: string,
@@ -118,11 +129,12 @@ export async function fetchRepoFiles(
   accessToken?: string,
   srcPath = 'src',
   hooks?: FetchProgressHooks,
+  skipPaths?: Set<string>,
 ): Promise<{ uiFiles: GitHubFile[]; docFiles: GitHubFile[] }> {
   const headers = buildHeaders(accessToken);
 
   const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
-  const treeRes = await fetch(treeUrl, { headers });
+  const treeRes = await fetch(treeUrl, { headers, signal: AbortSignal.timeout(15000) });
 
   if (treeRes.status === 403) {
     throw new Error(`GitHub API rate limit or access denied (403) for ${owner}/${repo}`);
@@ -137,20 +149,26 @@ export async function fetchRepoFiles(
   const treeData = (await treeRes.json()) as GitHubTreeResponse;
 
   // Filter to UI-relevant files
-  const uiItems = treeData.tree
+  const uiItemsAll = treeData.tree
     .filter((item) => item.type === 'blob' && isUiFile(item.path, srcPath))
     .slice(0, MAX_FILES);
 
   // Filter to doc files
-  const docItems = treeData.tree
+  const docItemsAll = treeData.tree
     .filter((item) => item.type === 'blob' && isDocFile(item.path))
     .slice(0, MAX_DOC_FILES);
+
+  const uiItems = skipPaths ? uiItemsAll.filter((item) => !skipPaths.has(item.path)) : uiItemsAll;
+  const docItems = skipPaths ? docItemsAll.filter((item) => !skipPaths.has(item.path)) : docItemsAll;
 
   const uiFiles: GitHubFile[] = [];
   const docFiles: GitHubFile[] = [];
 
-  await hooks?.onTotal?.(uiItems.length + docItems.length);
-  let processed = 0;
+  // Report the grand total across the whole job (already-done + remaining),
+  // not just this resume chunk, so the progress bar reads correctly.
+  const alreadyDone = skipPaths?.size ?? 0;
+  await hooks?.onTotal?.(alreadyDone + uiItems.length + docItems.length);
+  let processed = alreadyDone;
 
   // Fetch UI files
   for (const item of uiItems) {
