@@ -3,7 +3,7 @@
 
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { eq, and, sql, gte, like, desc } from 'drizzle-orm';
+import { eq, and, sql, gte, like, desc, asc } from 'drizzle-orm';
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
 import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob } from './store.js';
 import * as schema from './schema.js';
@@ -174,16 +174,20 @@ export class SqliteStore implements Store {
         root_url TEXT NOT NULL,
         max_pages INTEGER NOT NULL,
         max_depth INTEGER NOT NULL,
-        status TEXT NOT NULL DEFAULT 'running',
+        status TEXT NOT NULL DEFAULT 'queued',
         pages_ingested INTEGER NOT NULL DEFAULT 0,
         pages_queued INTEGER NOT NULL DEFAULT 0,
         pages_failed INTEGER NOT NULL DEFAULT 0,
         total_chunks INTEGER NOT NULL DEFAULT 0,
+        docs_skipped INTEGER NOT NULL DEFAULT 0,
+        visited_urls TEXT,
+        queue_state TEXT,
         error TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE INDEX IF NOT EXISTS idx_crawl_jobs_tenant ON crawl_jobs(tenant_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_crawl_jobs_status ON crawl_jobs(status, created_at);
 
       CREATE TABLE IF NOT EXISTS github_crawl_jobs (
         id TEXT PRIMARY KEY,
@@ -194,20 +198,23 @@ export class SqliteStore implements Store {
         base_url TEXT,
         ingest_docs INTEGER NOT NULL DEFAULT 1,
         auto_apply INTEGER NOT NULL DEFAULT 0,
-        status TEXT NOT NULL DEFAULT 'running',
+        status TEXT NOT NULL DEFAULT 'queued',
         total_files INTEGER NOT NULL DEFAULT 0,
         files_processed INTEGER NOT NULL DEFAULT 0,
         elements_found INTEGER NOT NULL DEFAULT 0,
         docs_ingested INTEGER NOT NULL DEFAULT 0,
         docs_chunks INTEGER NOT NULL DEFAULT 0,
+        docs_skipped INTEGER NOT NULL DEFAULT 0,
         applied INTEGER NOT NULL DEFAULT 0,
         applied_at TEXT,
         candidates TEXT,
+        processed_paths TEXT,
         error TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE INDEX IF NOT EXISTS idx_github_crawl_jobs_tenant ON github_crawl_jobs(tenant_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_github_crawl_jobs_status ON github_crawl_jobs(status, created_at);
 
       CREATE TABLE IF NOT EXISTS integration_triggers (
         id TEXT PRIMARY KEY,
@@ -333,6 +340,14 @@ export class SqliteStore implements Store {
     // Per-tenant enterprise license columns
     addColumnIfMissing('tenants', 'license_key', 'TEXT');
     addColumnIfMissing('tenants', 'license_expires_at', 'TEXT');
+
+    // Resumable-job checkpoint columns (added after crawl_jobs/github_crawl_jobs
+    // already existed on some deployments)
+    addColumnIfMissing('crawl_jobs', 'visited_urls', 'TEXT');
+    addColumnIfMissing('crawl_jobs', 'queue_state', 'TEXT');
+    addColumnIfMissing('github_crawl_jobs', 'processed_paths', 'TEXT');
+    addColumnIfMissing('crawl_jobs', 'docs_skipped', 'INTEGER NOT NULL DEFAULT 0');
+    addColumnIfMissing('github_crawl_jobs', 'docs_skipped', 'INTEGER NOT NULL DEFAULT 0');
 
     // Embedding / vector store columns on tenants
     addColumnIfMissing('tenants', 'embedding_provider', 'TEXT');
@@ -464,6 +479,7 @@ export class SqliteStore implements Store {
       description: entry.description,
       preconditions: entry.preconditions ? JSON.stringify(entry.preconditions) : null,
       source: entry.source,
+      platform: entry.platform ?? 'web',
     }).run();
   }
 
@@ -483,6 +499,7 @@ export class SqliteStore implements Store {
     if (patch.description !== undefined) values.description = patch.description;
     if (patch.preconditions !== undefined) values.preconditions = JSON.stringify(patch.preconditions);
     if (patch.source !== undefined) values.source = patch.source;
+    if (patch.platform !== undefined) values.platform = patch.platform;
 
     if (Object.keys(values).length > 0) {
       this.db.update(schema.functionalMapEntries).set(values)
@@ -521,6 +538,7 @@ export class SqliteStore implements Store {
       description: row.description,
       preconditions: row.preconditions ? JSON.parse(row.preconditions) : undefined,
       source: row.source as FunctionalMapEntry['source'],
+      platform: row.platform as FunctionalMapEntry['platform'],
     };
   }
 
@@ -826,6 +844,9 @@ export class SqliteStore implements Store {
       pagesQueued: job.pagesQueued,
       pagesFailed: job.pagesFailed,
       totalChunks: job.totalChunks,
+      docsSkipped: job.docsSkipped,
+      visitedUrls: job.visitedUrls ? JSON.stringify(job.visitedUrls) : null,
+      queueState: job.queueState ? JSON.stringify(job.queueState) : null,
       error: job.error ?? null,
     }).run();
   }
@@ -837,6 +858,9 @@ export class SqliteStore implements Store {
     if (patch.pagesQueued !== undefined) values.pagesQueued = patch.pagesQueued;
     if (patch.pagesFailed !== undefined) values.pagesFailed = patch.pagesFailed;
     if (patch.totalChunks !== undefined) values.totalChunks = patch.totalChunks;
+    if (patch.docsSkipped !== undefined) values.docsSkipped = patch.docsSkipped;
+    if (patch.visitedUrls !== undefined) values.visitedUrls = patch.visitedUrls ? JSON.stringify(patch.visitedUrls) : null;
+    if (patch.queueState !== undefined) values.queueState = patch.queueState ? JSON.stringify(patch.queueState) : null;
     if (patch.error !== undefined) values.error = patch.error;
 
     this.db.update(schema.crawlJobs).set(values).where(eq(schema.crawlJobs.id, id)).run();
@@ -855,14 +879,22 @@ export class SqliteStore implements Store {
     return rows.map(this.toCrawlJob);
   }
 
+  async getQueuedCrawlJobs(limit: number): Promise<CrawlJob[]> {
+    const rows = this.db.select().from(schema.crawlJobs)
+      .where(eq(schema.crawlJobs.status, 'queued'))
+      .orderBy(asc(schema.crawlJobs.createdAt))
+      .limit(limit).all();
+    return rows.map(this.toCrawlJob);
+  }
+
   async deleteCrawlJob(id: string): Promise<boolean> {
     const result = this.db.delete(schema.crawlJobs).where(eq(schema.crawlJobs.id, id)).run();
     return result.changes > 0;
   }
 
-  async failRunningCrawlJobs(reason: string): Promise<void> {
+  async requeueRunningCrawlJobs(): Promise<void> {
     this.db.update(schema.crawlJobs)
-      .set({ status: 'failed', error: reason, updatedAt: new Date().toISOString() })
+      .set({ status: 'queued', updatedAt: new Date().toISOString() })
       .where(eq(schema.crawlJobs.status, 'running')).run();
   }
 
@@ -884,9 +916,11 @@ export class SqliteStore implements Store {
       elementsFound: job.elementsFound,
       docsIngested: job.docsIngested,
       docsChunks: job.docsChunks,
+      docsSkipped: job.docsSkipped,
       applied: job.applied,
       appliedAt: job.appliedAt ?? null,
       candidates: job.candidates ? JSON.stringify(job.candidates) : null,
+      processedPaths: job.processedPaths ? JSON.stringify(job.processedPaths) : null,
       error: job.error ?? null,
     }).run();
   }
@@ -899,9 +933,11 @@ export class SqliteStore implements Store {
     if (patch.elementsFound !== undefined) values.elementsFound = patch.elementsFound;
     if (patch.docsIngested !== undefined) values.docsIngested = patch.docsIngested;
     if (patch.docsChunks !== undefined) values.docsChunks = patch.docsChunks;
+    if (patch.docsSkipped !== undefined) values.docsSkipped = patch.docsSkipped;
     if (patch.applied !== undefined) values.applied = patch.applied;
     if (patch.appliedAt !== undefined) values.appliedAt = patch.appliedAt;
     if (patch.candidates !== undefined) values.candidates = patch.candidates ? JSON.stringify(patch.candidates) : null;
+    if (patch.processedPaths !== undefined) values.processedPaths = patch.processedPaths ? JSON.stringify(patch.processedPaths) : null;
     if (patch.error !== undefined) values.error = patch.error;
 
     this.db.update(schema.githubCrawlJobs).set(values).where(eq(schema.githubCrawlJobs.id, id)).run();
@@ -920,14 +956,22 @@ export class SqliteStore implements Store {
     return rows.map(this.toGithubCrawlJob);
   }
 
+  async getQueuedGithubCrawlJobs(limit: number): Promise<GithubCrawlJob[]> {
+    const rows = this.db.select().from(schema.githubCrawlJobs)
+      .where(eq(schema.githubCrawlJobs.status, 'queued'))
+      .orderBy(asc(schema.githubCrawlJobs.createdAt))
+      .limit(limit).all();
+    return rows.map(this.toGithubCrawlJob);
+  }
+
   async deleteGithubCrawlJob(id: string): Promise<boolean> {
     const result = this.db.delete(schema.githubCrawlJobs).where(eq(schema.githubCrawlJobs.id, id)).run();
     return result.changes > 0;
   }
 
-  async failRunningGithubCrawlJobs(reason: string): Promise<void> {
+  async requeueRunningGithubCrawlJobs(): Promise<void> {
     this.db.update(schema.githubCrawlJobs)
-      .set({ status: 'failed', error: reason, updatedAt: new Date().toISOString() })
+      .set({ status: 'queued', updatedAt: new Date().toISOString() })
       .where(eq(schema.githubCrawlJobs.status, 'running')).run();
   }
 
@@ -947,9 +991,11 @@ export class SqliteStore implements Store {
       elementsFound: row.elementsFound,
       docsIngested: row.docsIngested,
       docsChunks: row.docsChunks,
+      docsSkipped: row.docsSkipped,
       applied: row.applied,
       appliedAt: row.appliedAt ?? undefined,
       candidates: row.candidates ? JSON.parse(row.candidates) : undefined,
+      processedPaths: row.processedPaths ? JSON.parse(row.processedPaths) : undefined,
       error: row.error ?? undefined,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -968,6 +1014,9 @@ export class SqliteStore implements Store {
       pagesQueued: row.pagesQueued,
       pagesFailed: row.pagesFailed,
       totalChunks: row.totalChunks,
+      docsSkipped: row.docsSkipped,
+      visitedUrls: row.visitedUrls ? JSON.parse(row.visitedUrls) : undefined,
+      queueState: row.queueState ? JSON.parse(row.queueState) : undefined,
       error: row.error ?? undefined,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

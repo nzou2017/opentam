@@ -131,11 +131,19 @@ export const crawlJobs = sqliteTable('crawl_jobs', {
   rootUrl: text('root_url').notNull(),
   maxPages: integer('max_pages').notNull(),
   maxDepth: integer('max_depth').notNull(),
-  status: text('status', { enum: ['running', 'completed', 'failed', 'cancelled'] }).notNull().default('running'),
+  status: text('status', { enum: ['queued', 'running', 'paused', 'completed', 'failed', 'cancelled'] }).notNull().default('queued'),
   pagesIngested: integer('pages_ingested').notNull().default(0),
   pagesQueued: integer('pages_queued').notNull().default(0),
   pagesFailed: integer('pages_failed').notNull().default(0),
   totalChunks: integer('total_chunks').notNull().default(0),
+  // Pages classified as not worth indexing (relevanceFilter.ts) — counted
+  // separately from pagesFailed (a real fetch/parse error) so "skipped as
+  // irrelevant" stays visible rather than looking like a failure.
+  docsSkipped: integer('docs_skipped').notNull().default(0),
+  // Checkpoint state (JSON) so a paused/interrupted job resumes where it
+  // left off instead of restarting the crawl from rootUrl.
+  visitedUrls: text('visited_urls'), // JSON string[]
+  queueState: text('queue_state'), // JSON {url, depth}[]
   error: text('error'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
@@ -150,15 +158,21 @@ export const githubCrawlJobs = sqliteTable('github_crawl_jobs', {
   baseUrl: text('base_url'),
   ingestDocs: integer('ingest_docs', { mode: 'boolean' }).notNull().default(true),
   autoApply: integer('auto_apply', { mode: 'boolean' }).notNull().default(false),
-  status: text('status', { enum: ['running', 'completed', 'failed', 'cancelled'] }).notNull().default('running'),
+  status: text('status', { enum: ['queued', 'running', 'paused', 'completed', 'failed', 'cancelled'] }).notNull().default('queued'),
   totalFiles: integer('total_files').notNull().default(0),
   filesProcessed: integer('files_processed').notNull().default(0),
   elementsFound: integer('elements_found').notNull().default(0),
   docsIngested: integer('docs_ingested').notNull().default(0),
   docsChunks: integer('docs_chunks').notNull().default(0),
+  // Docs classified as not worth indexing (relevanceFilter.ts) — visible
+  // separately from docsIngested rather than silently dropped.
+  docsSkipped: integer('docs_skipped').notNull().default(0),
   applied: integer('applied').notNull().default(0),
   appliedAt: text('applied_at'),
   candidates: text('candidates'), // JSON array of GithubCrawlCandidate
+  // Checkpoint state so a paused/interrupted job resumes instead of
+  // re-fetching (and re-counting) files it already processed.
+  processedPaths: text('processed_paths'), // JSON string[]
   error: text('error'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),

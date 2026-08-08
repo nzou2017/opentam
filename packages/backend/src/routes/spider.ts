@@ -7,7 +7,6 @@ import { randomUUID } from 'node:crypto';
 import { getStore } from '../db/index.js';
 import type { AuthenticatedRequest } from '../middleware/auth.js';
 import { requireRole } from '../middleware/rbac.js';
-import { spiderDocs } from '../crawler/spider.js';
 
 const SpiderBody = z.object({
   rootUrl: z.string().url(),
@@ -18,8 +17,11 @@ const SpiderBody = z.object({
   denyPatterns: z.array(z.string()).optional(),
 });
 
+const ACTIVE_STATUSES = new Set(['queued', 'running', 'paused']);
+
 export async function spiderRoutes(app: FastifyInstance): Promise<void> {
-  // Start a docs spider crawl
+  // Queue a docs spider crawl — the job worker (jobs/worker.ts) picks it up
+  // and runs it, respecting the configured concurrency limit.
   app.post('/api/v1/spider', { preHandler: [requireRole('admin')] }, async (request, reply) => {
     const req = request as AuthenticatedRequest;
     const tenantId = req.tenant?.id ?? req.user?.tenantId;
@@ -42,18 +44,14 @@ export async function spiderRoutes(app: FastifyInstance): Promise<void> {
       rootUrl,
       maxPages,
       maxDepth,
-      status: 'running',
+      status: 'queued',
       pagesIngested: 0,
       pagesQueued: 0,
       pagesFailed: 0,
       totalChunks: 0,
+      docsSkipped: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    });
-
-    // Run in background
-    spiderDocs(tenantId, parsed.data, jobId).catch(err => {
-      app.log.error({ err, jobId }, 'Spider job failed');
     });
 
     return reply.code(202).send({ jobId });
@@ -83,9 +81,10 @@ export async function spiderRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(job);
   });
 
-  // Cancel a running job — the spider loop checks job status before each
-  // page and stops once it sees anything other than 'running'.
-  app.post('/api/v1/spider/:jobId/cancel', { preHandler: [requireRole('admin')] }, async (request, reply) => {
+  // Pause a running job — the spider loop checks job status before each
+  // page and stops once it sees anything other than 'running', leaving its
+  // checkpoint (visited URLs + pending queue) in place to resume from.
+  app.post('/api/v1/spider/:jobId/pause', { preHandler: [requireRole('admin')] }, async (request, reply) => {
     const req = request as AuthenticatedRequest;
     const tenantId = req.tenant?.id ?? req.user?.tenantId;
     if (!tenantId) return reply.code(401).send({ error: 'Authentication required' });
@@ -97,6 +96,47 @@ export async function spiderRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: 'Job not found' });
     }
     if (job.status !== 'running') {
+      return reply.code(400).send({ error: `Job is ${job.status}, not running` });
+    }
+
+    const updated = await store.updateCrawlJob(jobId, { status: 'paused' });
+    return reply.send(updated);
+  });
+
+  // Resume a paused job — puts it back in the queue for the worker to pick
+  // up; it continues from its saved checkpoint rather than restarting.
+  app.post('/api/v1/spider/:jobId/resume', { preHandler: [requireRole('admin')] }, async (request, reply) => {
+    const req = request as AuthenticatedRequest;
+    const tenantId = req.tenant?.id ?? req.user?.tenantId;
+    if (!tenantId) return reply.code(401).send({ error: 'Authentication required' });
+
+    const { jobId } = request.params as { jobId: string };
+    const store = getStore();
+    const job = await store.getCrawlJob(jobId);
+    if (!job || job.tenantId !== tenantId) {
+      return reply.code(404).send({ error: 'Job not found' });
+    }
+    if (job.status !== 'paused') {
+      return reply.code(400).send({ error: `Job is ${job.status}, not paused` });
+    }
+
+    const updated = await store.updateCrawlJob(jobId, { status: 'queued' });
+    return reply.send(updated);
+  });
+
+  // Cancel a queued/running/paused job — terminal, cannot be resumed.
+  app.post('/api/v1/spider/:jobId/cancel', { preHandler: [requireRole('admin')] }, async (request, reply) => {
+    const req = request as AuthenticatedRequest;
+    const tenantId = req.tenant?.id ?? req.user?.tenantId;
+    if (!tenantId) return reply.code(401).send({ error: 'Authentication required' });
+
+    const { jobId } = request.params as { jobId: string };
+    const store = getStore();
+    const job = await store.getCrawlJob(jobId);
+    if (!job || job.tenantId !== tenantId) {
+      return reply.code(404).send({ error: 'Job not found' });
+    }
+    if (!ACTIVE_STATUSES.has(job.status)) {
       return reply.code(400).send({ error: `Job is already ${job.status}` });
     }
 
@@ -104,7 +144,7 @@ export async function spiderRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(updated);
   });
 
-  // Remove a finished job from history. Running jobs must be cancelled first.
+  // Remove a finished job from history. Active jobs must be cancelled first.
   app.delete('/api/v1/spider/:jobId', { preHandler: [requireRole('admin')] }, async (request, reply) => {
     const req = request as AuthenticatedRequest;
     const tenantId = req.tenant?.id ?? req.user?.tenantId;
@@ -116,7 +156,7 @@ export async function spiderRoutes(app: FastifyInstance): Promise<void> {
     if (!job || job.tenantId !== tenantId) {
       return reply.code(404).send({ error: 'Job not found' });
     }
-    if (job.status === 'running') {
+    if (ACTIVE_STATUSES.has(job.status)) {
       return reply.code(400).send({ error: 'Cancel the job before removing it' });
     }
 

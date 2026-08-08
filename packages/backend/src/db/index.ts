@@ -5,7 +5,7 @@ import type { Store } from './store.js';
 import { config } from '../config.js';
 
 export type { Store };
-export type { User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob, GithubCrawlCandidate } from './store.js';
+export type { User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, ServerLicense, TeamInvite, CrawlJob, CrawlJobStatus, CrawlJobQueueItem, GithubCrawlJob, GithubCrawlCandidate } from './store.js';
 
 let _store: Store | null = null;
 

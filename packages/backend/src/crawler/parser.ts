@@ -5,7 +5,7 @@ import { parse } from '@babel/parser';
 import type { Node, File, JSXElement, JSXOpeningElement, JSXAttribute, JSXIdentifier, JSXMemberExpression, StringLiteral, JSXText, JSXExpressionContainer } from '@babel/types';
 
 export interface ExtractedElement {
-  type: 'button' | 'link' | 'input' | 'form' | 'component';
+  type: 'button' | 'link' | 'input' | 'form' | 'toggle' | 'component';
   label?: string;
   selector?: string;
   href?: string;

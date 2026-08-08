@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import type { Platform } from '@opentam/shared';
 import type { ExtractedElement } from './parser.js';
 
 export interface MapCandidate {
@@ -9,6 +10,52 @@ export interface MapCandidate {
   selector: string;
   description: string;
   source: 'crawler';
+  platform?: Platform;
+}
+
+/** Derive a screen name from a Swift file path, e.g. Sources/Views/LoginView.swift -> LoginView */
+function filePathToScreenName(filePath: string): string {
+  const base = filePath.split('/').pop() ?? filePath;
+  return base.replace(/\.swift$/, '');
+}
+
+const SWIFT_TYPE_LABELS: Record<string, string> = {
+  button: 'Button',
+  link: 'Navigation link',
+  input: 'Text field',
+  toggle: 'Toggle',
+};
+
+function toIosMapCandidates(elements: ExtractedElement[]): MapCandidate[] {
+  const seen = new Set<string>();
+  const candidates: MapCandidate[] = [];
+
+  for (const el of elements) {
+    // The accessibility identifier is the only reliable XCUITest lookup
+    // mechanism (the iOS analog of a CSS selector) — without one, there's
+    // nothing an automated intervention could target, so skip it, same as
+    // the web mapper already does for inputs lacking a selector.
+    const selector = el.selector;
+    if (!selector || seen.has(selector)) continue;
+    seen.add(selector);
+
+    const screen = filePathToScreenName(el.filePath);
+    const typeLabel = SWIFT_TYPE_LABELS[el.type] ?? 'Element';
+    const feature = el.label
+      ? (el.type === 'input' ? `${el.label} field` : el.type === 'toggle' ? `${el.label} toggle` : el.label)
+      : `${typeLabel} on ${screen}`;
+
+    candidates.push({
+      feature,
+      url: screen,
+      selector,
+      description: `${typeLabel} on the ${screen} screen`,
+      source: 'crawler',
+      platform: 'ios',
+    });
+  }
+
+  return candidates;
 }
 
 /**
@@ -44,7 +91,10 @@ function filePathToUrl(filePath: string): string {
 export function toMapCandidates(
   elements: ExtractedElement[],
   baseUrl: string,
+  platform: Platform = 'web',
 ): MapCandidate[] {
+  if (platform === 'ios') return toIosMapCandidates(elements);
+
   const seen = new Set<string>();
   const candidates: MapCandidate[] = [];
 

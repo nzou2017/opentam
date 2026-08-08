@@ -30,36 +30,57 @@ async function applyCandidates(tenantId: string, candidates: GithubCrawlCandidat
       selector: candidate.selector,
       description: candidate.description,
       source: 'crawler',
+      platform: candidate.platform,
     });
     applied++;
   }
   return applied;
 }
 
-async function runGithubCrawlJob(
-  tenantId: string,
-  jobId: string,
-  params: { repoUrl: string; accessToken?: string; branch?: string; srcPath?: string; baseUrl?: string; ingestDocs: boolean; autoApply: boolean },
-): Promise<void> {
+// Access tokens are never persisted to the DB (job rows are polled by the
+// dashboard and readable by any admin). A token supplied at job-creation
+// time is held here only until the worker picks the job up — same
+// lifetime the token used to have when creation invoked the crawl
+// synchronously, just relocated now that creation and execution are
+// decoupled by the job queue. If the server restarts before the job is
+// picked up (or the job is later resumed after a pause), the token is
+// gone and the crawl proceeds unauthenticated, same as any other
+// checkpoint state the worker didn't have a chance to persist.
+const pendingAccessTokens = new Map<string, string>();
+
+/**
+ * Runs (or resumes) a queued/requeued github_crawl_jobs row — called by the
+ * job worker (jobs/worker.ts) after it flips the row to 'running'. Loads
+ * its own params from the job row rather than taking them as arguments, so
+ * a resume after a pause or a restart-triggered requeue works the same way
+ * as the first run.
+ */
+export async function runGithubCrawlJob(jobId: string): Promise<void> {
   const store = getStore();
+  const job = await store.getGithubCrawlJob(jobId);
+  if (!job || job.status !== 'running') return;
+
+  const accessToken = pendingAccessTokens.get(jobId);
+  pendingAccessTokens.delete(jobId);
+
   try {
-    const result = await crawlGitHubRepo(params.repoUrl, {
-      accessToken: params.accessToken,
-      branch: params.branch,
-      srcPath: params.srcPath,
-      baseUrl: params.baseUrl,
-      ingestDocs: params.ingestDocs,
-      tenantId,
+    const result = await crawlGitHubRepo(job.repoUrl, {
+      accessToken,
+      branch: job.branch ?? undefined,
+      srcPath: job.srcPath ?? undefined,
+      baseUrl: job.baseUrl ?? undefined,
+      ingestDocs: job.ingestDocs,
+      tenantId: job.tenantId,
       jobId,
     });
 
-    const job = await store.getGithubCrawlJob(jobId);
-    if (job?.status !== 'running') return; // cancelled while crawling
+    const current = await store.getGithubCrawlJob(jobId);
+    if (current?.status !== 'running') return; // paused/cancelled while crawling
 
     let applied = 0;
     let appliedAt: string | undefined;
-    if (params.autoApply && result.candidates.length > 0) {
-      applied = await applyCandidates(tenantId, result.candidates);
+    if (job.autoApply && result.candidates.length > 0) {
+      applied = await applyCandidates(job.tenantId, result.candidates);
       appliedAt = new Date().toISOString();
     }
 
@@ -69,7 +90,9 @@ async function runGithubCrawlJob(
       elementsFound: result.elementsFound,
       docsIngested: result.docsIngested ?? 0,
       docsChunks: result.docsChunks ?? 0,
+      docsSkipped: result.docsSkipped ?? 0,
       candidates: result.candidates,
+      processedPaths: [],
       applied,
       appliedAt,
     });
@@ -99,6 +122,8 @@ const CrawlPreviewQuery = z.object({
 });
 
 const crawlSessions = new Map<string, CrawlResult>();
+
+const ACTIVE_STATUSES = new Set(['queued', 'running', 'paused']);
 
 export async function crawlRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/v1/crawl', async (request, reply) => {
@@ -145,6 +170,7 @@ export async function crawlRoutes(app: FastifyInstance): Promise<void> {
           selector: candidate.selector,
           description: candidate.description,
           source: 'crawler',
+          platform: candidate.platform,
         });
         applied++;
       }
@@ -157,6 +183,7 @@ export async function crawlRoutes(app: FastifyInstance): Promise<void> {
       applied,
       docsIngested: result.docsIngested ?? 0,
       docsChunks: result.docsChunks ?? 0,
+      docsSkipped: result.docsSkipped ?? 0,
     });
   });
 
@@ -230,8 +257,10 @@ export async function crawlRoutes(app: FastifyInstance): Promise<void> {
     const { repoUrl, accessToken, branch, srcPath, baseUrl, ingestDocs, autoApply } = parsed.data;
 
     // Create the job row before responding, so a client polling immediately
-    // after the 202 always finds it. Access tokens are never persisted —
-    // they're only held in memory for this one run.
+    // after the 202 always finds it. The job worker (jobs/worker.ts) picks
+    // it up and runs it, respecting the configured concurrency limit.
+    if (accessToken) pendingAccessTokens.set(jobId, accessToken);
+
     await store.createGithubCrawlJob({
       id: jobId,
       tenantId,
@@ -241,19 +270,16 @@ export async function crawlRoutes(app: FastifyInstance): Promise<void> {
       baseUrl: baseUrl ?? null,
       ingestDocs,
       autoApply,
-      status: 'running',
+      status: 'queued',
       totalFiles: 0,
       filesProcessed: 0,
       elementsFound: 0,
       docsIngested: 0,
       docsChunks: 0,
+      docsSkipped: 0,
       applied: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    });
-
-    runGithubCrawlJob(tenantId, jobId, { repoUrl, accessToken, branch, srcPath, baseUrl, ingestDocs, autoApply }).catch(err => {
-      app.log.error({ err, jobId }, 'GitHub crawl job failed');
     });
 
     return reply.code(202).send({ jobId });
@@ -283,9 +309,10 @@ export async function crawlRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(job);
   });
 
-  // Cancel a running job — the crawl loop checks job status before each
-  // file fetch and stops once it sees anything other than 'running'.
-  app.post('/api/v1/crawl/jobs/:jobId/cancel', { preHandler: [requireRole('admin')] }, async (request, reply) => {
+  // Pause a running job — the crawl loop checks job status before each
+  // file/doc and stops at the next checkpoint, leaving processedPaths and
+  // the already-found candidates in place to resume from.
+  app.post('/api/v1/crawl/jobs/:jobId/pause', { preHandler: [requireRole('admin')] }, async (request, reply) => {
     const req = request as AuthenticatedRequest;
     const tenantId = req.tenant?.id ?? req.user?.tenantId;
     if (!tenantId) return reply.code(401).send({ error: 'Authentication required' });
@@ -297,9 +324,51 @@ export async function crawlRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: 'Job not found' });
     }
     if (job.status !== 'running') {
+      return reply.code(400).send({ error: `Job is ${job.status}, not running` });
+    }
+
+    const updated = await store.updateGithubCrawlJob(jobId, { status: 'paused' });
+    return reply.send(updated);
+  });
+
+  // Resume a paused job — puts it back in the queue for the worker to pick
+  // up; it continues from processedPaths rather than re-fetching everything.
+  app.post('/api/v1/crawl/jobs/:jobId/resume', { preHandler: [requireRole('admin')] }, async (request, reply) => {
+    const req = request as AuthenticatedRequest;
+    const tenantId = req.tenant?.id ?? req.user?.tenantId;
+    if (!tenantId) return reply.code(401).send({ error: 'Authentication required' });
+
+    const { jobId } = request.params as { jobId: string };
+    const store = getStore();
+    const job = await store.getGithubCrawlJob(jobId);
+    if (!job || job.tenantId !== tenantId) {
+      return reply.code(404).send({ error: 'Job not found' });
+    }
+    if (job.status !== 'paused') {
+      return reply.code(400).send({ error: `Job is ${job.status}, not paused` });
+    }
+
+    const updated = await store.updateGithubCrawlJob(jobId, { status: 'queued' });
+    return reply.send(updated);
+  });
+
+  // Cancel a queued/running/paused job — terminal, cannot be resumed.
+  app.post('/api/v1/crawl/jobs/:jobId/cancel', { preHandler: [requireRole('admin')] }, async (request, reply) => {
+    const req = request as AuthenticatedRequest;
+    const tenantId = req.tenant?.id ?? req.user?.tenantId;
+    if (!tenantId) return reply.code(401).send({ error: 'Authentication required' });
+
+    const { jobId } = request.params as { jobId: string };
+    const store = getStore();
+    const job = await store.getGithubCrawlJob(jobId);
+    if (!job || job.tenantId !== tenantId) {
+      return reply.code(404).send({ error: 'Job not found' });
+    }
+    if (!ACTIVE_STATUSES.has(job.status)) {
       return reply.code(400).send({ error: `Job is already ${job.status}` });
     }
 
+    pendingAccessTokens.delete(jobId);
     const updated = await store.updateGithubCrawlJob(jobId, { status: 'cancelled' });
     return reply.send(updated);
   });
@@ -342,7 +411,7 @@ export async function crawlRoutes(app: FastifyInstance): Promise<void> {
     if (!job || job.tenantId !== tenantId) {
       return reply.code(404).send({ error: 'Job not found' });
     }
-    if (job.status === 'running') {
+    if (ACTIVE_STATUSES.has(job.status)) {
       return reply.code(400).send({ error: 'Cancel the job before removing it' });
     }
 

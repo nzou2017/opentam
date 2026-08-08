@@ -5,6 +5,7 @@
 
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type { Platform } from '@opentam/shared';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001';
 
@@ -15,7 +16,7 @@ async function getAuthToken(): Promise<string> {
   return token;
 }
 
-type JobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+type JobStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 interface MapCandidate {
   feature: string;
@@ -23,7 +24,20 @@ interface MapCandidate {
   selector: string;
   description: string;
   source: 'crawler';
+  platform?: Platform;
 }
+
+const PLATFORM_LABELS: Record<Platform, string> = {
+  web: 'Web',
+  ios: 'iOS',
+  android: 'Android',
+};
+
+const PLATFORM_BADGE_CLS: Record<Platform, string> = {
+  web: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
+  ios: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+  android: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
+};
 
 interface CrawlJob {
   id: string;
@@ -39,6 +53,7 @@ interface CrawlJob {
   elementsFound: number;
   docsIngested: number;
   docsChunks: number;
+  docsSkipped: number;
   applied: number;
   appliedAt?: string;
   candidates?: MapCandidate[];
@@ -47,11 +62,15 @@ interface CrawlJob {
 }
 
 const STATUS_STYLES: Record<JobStatus, string> = {
+  queued: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
   running: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+  paused: 'bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300',
   completed: 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300',
   failed: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
   cancelled: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
 };
+
+const ACTIVE_STATUSES = new Set<JobStatus>(['queued', 'running', 'paused']);
 
 export function CrawlManager() {
   const [repoUrl, setRepoUrl] = useState('');
@@ -86,9 +105,10 @@ export function CrawlManager() {
     fetchJobs();
   }, [fetchJobs]);
 
-  // Poll only while something is actually running.
+  // Poll while anything is active (queued/running/paused jobs can still
+  // change status from the worker or another tab).
   useEffect(() => {
-    const hasRunning = jobs.some(j => j.status === 'running');
+    const hasRunning = jobs.some(j => ACTIVE_STATUSES.has(j.status));
     if (hasRunning && !pollRef.current) {
       pollRef.current = setInterval(fetchJobs, 2000);
     } else if (!hasRunning && pollRef.current) {
@@ -153,6 +173,32 @@ export function CrawlManager() {
     setBusy(jobId, true);
     try {
       const res = await fetch(`${BACKEND_URL}/api/v1/crawl/jobs/${jobId}/cancel`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${await getAuthToken()}` },
+      });
+      if (res.ok) await fetchJobs();
+    } finally {
+      setBusy(jobId, false);
+    }
+  }
+
+  async function handlePause(jobId: string) {
+    setBusy(jobId, true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/crawl/jobs/${jobId}/pause`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${await getAuthToken()}` },
+      });
+      if (res.ok) await fetchJobs();
+    } finally {
+      setBusy(jobId, false);
+    }
+  }
+
+  async function handleResume(jobId: string) {
+    setBusy(jobId, true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/crawl/jobs/${jobId}/resume`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${await getAuthToken()}` },
       });
@@ -323,10 +369,11 @@ export function CrawlManager() {
                   )}
 
                   <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                    {job.status === 'running'
+                    {job.status === 'queued' ? 'Waiting for a worker slot' : job.status === 'running'
                       ? `${job.filesProcessed} of ${job.totalFiles || '?'} files processed`
                       : `${job.filesProcessed} files processed, ${job.elementsFound} elements found`}
-                    {job.docsIngested > 0 && `, ${job.docsIngested} docs ingested (${job.docsChunks} chunks)`}
+                    {job.status !== 'queued' && job.docsIngested > 0 && `, ${job.docsIngested} docs ingested (${job.docsChunks} chunks)`}
+                    {job.status !== 'queued' && job.docsSkipped > 0 && `, ${job.docsSkipped} doc${job.docsSkipped === 1 ? '' : 's'} skipped as irrelevant`}
                   </p>
 
                   {job.status === 'completed' && (
@@ -340,9 +387,10 @@ export function CrawlManager() {
 
                   {job.status === 'completed' && job.elementsFound === 0 && job.filesProcessed > 0 && (
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-500">
-                      No UI candidates found because this crawler only extracts them from React (.tsx/.jsx)
-                      source files under the configured source path — it doesn't parse Swift, Kotlin, or other
-                      non-React UI code. Docs were still ingested for search above, if any were found.
+                      No UI candidates found. This crawler extracts React (.tsx/.jsx) and SwiftUI (.swift)
+                      source — it doesn't parse Kotlin/Android or other UI code yet. For SwiftUI, elements
+                      only surface if they set <code>.accessibilityIdentifier(...)</code>, which is what
+                      stands in for a CSS selector. Docs were still ingested for search above, if any were found.
                     </p>
                   )}
 
@@ -365,26 +413,75 @@ export function CrawlManager() {
                       <table className="w-full text-xs">
                         <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
                           <tr>
+                            <th className="px-3 py-2 text-left">Platform</th>
                             <th className="px-3 py-2 text-left">Feature</th>
-                            <th className="px-3 py-2 text-left">URL</th>
+                            <th className="px-3 py-2 text-left">{'URL / Screen'}</th>
                             <th className="px-3 py-2 text-left">Selector</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                          {job.candidates.map((c, i) => (
-                            <tr key={i}>
-                              <td className="px-3 py-2 font-medium text-gray-900 dark:text-gray-100">{c.feature}</td>
-                              <td className="px-3 py-2 font-mono text-gray-600 dark:text-gray-400">{c.url}</td>
-                              <td className="px-3 py-2 font-mono text-amber-700 dark:text-amber-400">{c.selector}</td>
-                            </tr>
-                          ))}
+                          {job.candidates.map((c, i) => {
+                            const platform = c.platform ?? 'web';
+                            return (
+                              <tr key={i}>
+                                <td className="px-3 py-2">
+                                  <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${PLATFORM_BADGE_CLS[platform]}`}>
+                                    {PLATFORM_LABELS[platform]}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 font-medium text-gray-900 dark:text-gray-100">{c.feature}</td>
+                                <td className="px-3 py-2 font-mono text-gray-600 dark:text-gray-400">{c.url}</td>
+                                <td className="px-3 py-2 font-mono text-amber-700 dark:text-amber-400">{c.selector}</td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
                   )}
 
                   <div className="mt-3 flex gap-4">
-                    {job.status === 'running' ? (
+                    {job.status === 'running' && (
+                      <>
+                        <button
+                          onClick={() => handlePause(job.id)}
+                          disabled={busy}
+                          aria-label="Pause job"
+                          className="text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 disabled:opacity-50"
+                        >
+                          {busy ? 'Pausing...' : 'Pause'}
+                        </button>
+                        <button
+                          onClick={() => handleCancel(job.id)}
+                          disabled={busy}
+                          aria-label="Cancel job"
+                          className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                        >
+                          {busy ? 'Cancelling...' : 'Cancel'}
+                        </button>
+                      </>
+                    )}
+                    {job.status === 'paused' && (
+                      <>
+                        <button
+                          onClick={() => handleResume(job.id)}
+                          disabled={busy}
+                          aria-label="Resume job"
+                          className="text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 disabled:opacity-50"
+                        >
+                          {busy ? 'Resuming...' : 'Resume'}
+                        </button>
+                        <button
+                          onClick={() => handleCancel(job.id)}
+                          disabled={busy}
+                          aria-label="Cancel job"
+                          className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                        >
+                          {busy ? 'Cancelling...' : 'Cancel'}
+                        </button>
+                      </>
+                    )}
+                    {job.status === 'queued' && (
                       <button
                         onClick={() => handleCancel(job.id)}
                         disabled={busy}
@@ -393,7 +490,8 @@ export function CrawlManager() {
                       >
                         {busy ? 'Cancelling...' : 'Cancel'}
                       </button>
-                    ) : (
+                    )}
+                    {!ACTIVE_STATUSES.has(job.status) && (
                       <>
                         {canApply && (
                           <button

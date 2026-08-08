@@ -18,17 +18,29 @@ export interface ServerLicense {
   updatedAt: string;
 }
 
+export type CrawlJobStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+export interface CrawlJobQueueItem {
+  url: string;
+  depth: number;
+}
+
 export interface CrawlJob {
   id: string;
   tenantId: string;
   rootUrl: string;
   maxPages: number;
   maxDepth: number;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  status: CrawlJobStatus;
   pagesIngested: number;
   pagesQueued: number;
   pagesFailed: number;
   totalChunks: number;
+  /** Pages classified as not worth indexing (relevanceFilter.ts), tracked separately from pagesFailed. */
+  docsSkipped: number;
+  /** Checkpoint state — non-empty once the crawl has made progress, used to resume instead of restarting at rootUrl. */
+  visitedUrls?: string[];
+  queueState?: CrawlJobQueueItem[];
   error?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -40,6 +52,7 @@ export interface GithubCrawlCandidate {
   selector: string;
   description: string;
   source: 'crawler';
+  platform?: Platform;
 }
 
 export interface GithubCrawlJob {
@@ -51,15 +64,19 @@ export interface GithubCrawlJob {
   baseUrl?: string | null;
   ingestDocs: boolean;
   autoApply: boolean;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  status: CrawlJobStatus;
   totalFiles: number;
   filesProcessed: number;
   elementsFound: number;
   docsIngested: number;
   docsChunks: number;
+  /** Docs classified as not worth indexing (relevanceFilter.ts). */
+  docsSkipped: number;
   applied: number;
   appliedAt?: string | null;
   candidates?: GithubCrawlCandidate[];
+  /** Checkpoint state — file paths already fetched+processed, used to resume instead of re-fetching everything. */
+  processedPaths?: string[];
   error?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -210,17 +227,26 @@ export interface Store {
   updateCrawlJob(id: string, patch: Partial<Omit<CrawlJob, 'id' | 'tenantId'>>): Promise<CrawlJob | undefined>;
   getCrawlJob(id: string): Promise<CrawlJob | undefined>;
   getCrawlJobsByTenantId(tenantId: string): Promise<CrawlJob[]>;
+  /** Oldest-first, across all tenants — used by the job worker to pick up work. */
+  getQueuedCrawlJobs(limit: number): Promise<CrawlJob[]>;
   deleteCrawlJob(id: string): Promise<boolean>;
-  /** Called once at startup — any job still 'running' belonged to a process that's gone, so it can never finish. */
-  failRunningCrawlJobs(reason: string): Promise<void>;
+  /**
+   * Called once at startup — any job still 'running' belonged to a process
+   * that's gone (crash/redeploy). Requeues it (checkpoint state preserved)
+   * rather than failing it outright, so the worker picks it back up and
+   * resumes instead of losing all progress.
+   */
+  requeueRunningCrawlJobs(): Promise<void>;
 
   // ── Crawl jobs (GitHub repo crawl) ───────────────────────────────────
   createGithubCrawlJob(job: GithubCrawlJob): Promise<void>;
   updateGithubCrawlJob(id: string, patch: Partial<Omit<GithubCrawlJob, 'id' | 'tenantId'>>): Promise<GithubCrawlJob | undefined>;
   getGithubCrawlJob(id: string): Promise<GithubCrawlJob | undefined>;
   getGithubCrawlJobsByTenantId(tenantId: string): Promise<GithubCrawlJob[]>;
+  /** Oldest-first, across all tenants — used by the job worker to pick up work. */
+  getQueuedGithubCrawlJobs(limit: number): Promise<GithubCrawlJob[]>;
   deleteGithubCrawlJob(id: string): Promise<boolean>;
-  failRunningGithubCrawlJobs(reason: string): Promise<void>;
+  requeueRunningGithubCrawlJobs(): Promise<void>;
 
   // ── Integrations ─────────────────────────────────────────────────────
   getIntegrationsByTenantId(tenantId: string): Promise<Integration[]>;

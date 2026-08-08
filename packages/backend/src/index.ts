@@ -37,6 +37,7 @@ import { seedQAdminDocs } from './seed/seedQAdminDocs.js';
 import { initLicense } from './license.js';
 import { setupRoutes } from './routes/setup.js';
 import { startLicenseRefreshScheduler } from './services/licenseRefresh.js';
+import { startCrawlJobWorker } from './jobs/worker.js';
 
 async function bootstrap(): Promise<void> {
   const isDev = process.env.NODE_ENV !== 'production';
@@ -55,16 +56,21 @@ async function bootstrap(): Promise<void> {
   await initStore();
 
   // Any crawl job still 'running' belonged to a previous process that's
-  // gone (a crash or redeploy) — it can never finish, so surface that to
-  // the user instead of leaving it stuck showing "running" forever.
-  await getStore().failRunningCrawlJobs('Interrupted by a server restart');
-  await getStore().failRunningGithubCrawlJobs('Interrupted by a server restart');
+  // gone (a crash or redeploy) — requeue it (checkpoint state preserved)
+  // instead of failing it, so the job worker below picks it back up and
+  // resumes rather than leaving it stuck showing "running" forever or
+  // losing all progress.
+  await getStore().requeueRunningCrawlJobs();
+  await getStore().requeueRunningGithubCrawlJobs();
 
   // Initialize license verification
   await initLicense();
 
   // Start background license refresh scheduler
   startLicenseRefreshScheduler();
+
+  // Start the crawl job worker (picks up queued spider/GitHub crawl jobs)
+  startCrawlJobWorker();
 
   // Initialize integration bus
   initIntegrationBus();

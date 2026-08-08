@@ -488,15 +488,21 @@ class InMemoryStore implements Store {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  async getQueuedCrawlJobs(limit: number): Promise<CrawlJob[]> {
+    return [...this.crawlJobsMap.values()]
+      .filter(j => j.status === 'queued')
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(0, limit);
+  }
+
   async deleteCrawlJob(id: string): Promise<boolean> {
     return this.crawlJobsMap.delete(id);
   }
 
-  async failRunningCrawlJobs(reason: string): Promise<void> {
+  async requeueRunningCrawlJobs(): Promise<void> {
     for (const job of this.crawlJobsMap.values()) {
       if (job.status === 'running') {
-        job.status = 'failed';
-        job.error = reason;
+        job.status = 'queued';
         job.updatedAt = new Date().toISOString();
       }
     }
@@ -526,15 +532,21 @@ class InMemoryStore implements Store {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  async getQueuedGithubCrawlJobs(limit: number): Promise<GithubCrawlJob[]> {
+    return [...this.githubCrawlJobsMap.values()]
+      .filter(j => j.status === 'queued')
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(0, limit);
+  }
+
   async deleteGithubCrawlJob(id: string): Promise<boolean> {
     return this.githubCrawlJobsMap.delete(id);
   }
 
-  async failRunningGithubCrawlJobs(reason: string): Promise<void> {
+  async requeueRunningGithubCrawlJobs(): Promise<void> {
     for (const job of this.githubCrawlJobsMap.values()) {
       if (job.status === 'running') {
-        job.status = 'failed';
-        job.error = reason;
+        job.status = 'queued';
         job.updatedAt = new Date().toISOString();
       }
     }

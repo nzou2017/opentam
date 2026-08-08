@@ -15,7 +15,7 @@ async function getAuthToken(): Promise<string> {
   return token;
 }
 
-type JobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+type JobStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 interface CrawlJob {
   id: string;
@@ -27,17 +27,22 @@ interface CrawlJob {
   pagesQueued: number;
   pagesFailed: number;
   totalChunks: number;
+  docsSkipped: number;
   error?: string;
   createdAt: string;
   updatedAt: string;
 }
 
 const STATUS_STYLES: Record<JobStatus, string> = {
+  queued: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
   running: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+  paused: 'bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300',
   completed: 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300',
   failed: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
   cancelled: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
 };
+
+const ACTIVE_STATUSES = new Set<JobStatus>(['queued', 'running', 'paused']);
 
 export function SpiderManager() {
   const [rootUrl, setRootUrl] = useState('');
@@ -71,9 +76,10 @@ export function SpiderManager() {
     fetchJobs();
   }, [fetchJobs]);
 
-  // Poll only while something is actually running.
+  // Poll while anything is active (queued/running/paused jobs can still
+  // change status from the worker or another tab).
   useEffect(() => {
-    const hasRunning = jobs.some(j => j.status === 'running');
+    const hasRunning = jobs.some(j => ACTIVE_STATUSES.has(j.status));
     if (hasRunning && !pollRef.current) {
       pollRef.current = setInterval(fetchJobs, 2000);
     } else if (!hasRunning && pollRef.current) {
@@ -132,6 +138,32 @@ export function SpiderManager() {
     setBusy(jobId, true);
     try {
       const res = await fetch(`${BACKEND_URL}/api/v1/spider/${jobId}/cancel`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${await getAuthToken()}` },
+      });
+      if (res.ok) await fetchJobs();
+    } finally {
+      setBusy(jobId, false);
+    }
+  }
+
+  async function handlePause(jobId: string) {
+    setBusy(jobId, true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/spider/${jobId}/pause`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${await getAuthToken()}` },
+      });
+      if (res.ok) await fetchJobs();
+    } finally {
+      setBusy(jobId, false);
+    }
+  }
+
+  async function handleResume(jobId: string) {
+    setBusy(jobId, true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/spider/${jobId}/resume`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${await getAuthToken()}` },
       });
@@ -265,10 +297,15 @@ export function SpiderManager() {
                   )}
 
                   <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                    {job.pagesIngested} page{job.pagesIngested === 1 ? '' : 's'} ingested
-                    {job.status === 'running' && `, ${job.pagesQueued} queued`}
-                    {job.pagesFailed > 0 && `, ${job.pagesFailed} failed`}
-                    {job.status !== 'running' && `, ${job.totalChunks} chunks indexed`}
+                    {job.status === 'queued' ? 'Waiting for a worker slot' : (
+                      <>
+                        {job.pagesIngested} page{job.pagesIngested === 1 ? '' : 's'} ingested
+                        {job.status === 'running' && `, ${job.pagesQueued} queued`}
+                        {job.pagesFailed > 0 && `, ${job.pagesFailed} failed`}
+                        {job.docsSkipped > 0 && `, ${job.docsSkipped} skipped as irrelevant`}
+                        {!ACTIVE_STATUSES.has(job.status) && `, ${job.totalChunks} chunks indexed`}
+                      </>
+                    )}
                   </p>
 
                   {job.error && (
@@ -276,7 +313,47 @@ export function SpiderManager() {
                   )}
 
                   <div className="mt-3 flex gap-4">
-                    {job.status === 'running' ? (
+                    {job.status === 'running' && (
+                      <>
+                        <button
+                          onClick={() => handlePause(job.id)}
+                          disabled={busy}
+                          aria-label="Pause job"
+                          className="text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 disabled:opacity-50"
+                        >
+                          {busy ? 'Pausing...' : 'Pause'}
+                        </button>
+                        <button
+                          onClick={() => handleCancel(job.id)}
+                          disabled={busy}
+                          aria-label="Cancel job"
+                          className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                        >
+                          {busy ? 'Cancelling...' : 'Cancel'}
+                        </button>
+                      </>
+                    )}
+                    {job.status === 'paused' && (
+                      <>
+                        <button
+                          onClick={() => handleResume(job.id)}
+                          disabled={busy}
+                          aria-label="Resume job"
+                          className="text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 disabled:opacity-50"
+                        >
+                          {busy ? 'Resuming...' : 'Resume'}
+                        </button>
+                        <button
+                          onClick={() => handleCancel(job.id)}
+                          disabled={busy}
+                          aria-label="Cancel job"
+                          className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                        >
+                          {busy ? 'Cancelling...' : 'Cancel'}
+                        </button>
+                      </>
+                    )}
+                    {job.status === 'queued' && (
                       <button
                         onClick={() => handleCancel(job.id)}
                         disabled={busy}
@@ -285,7 +362,8 @@ export function SpiderManager() {
                       >
                         {busy ? 'Cancelling...' : 'Cancel'}
                       </button>
-                    ) : (
+                    )}
+                    {!ACTIVE_STATUSES.has(job.status) && (
                       <>
                         <button
                           onClick={() => handleRetry(job)}
