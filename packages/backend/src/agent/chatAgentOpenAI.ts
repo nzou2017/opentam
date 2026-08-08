@@ -4,7 +4,7 @@
 import OpenAI from 'openai';
 import type { FunctionalMapEntry, InterventionCommand, Platform } from '@opentam/shared';
 import { config } from '../config.js';
-import { getOpenAIToolDefinitions, executeLookup, executeSearchDocs, executeSearchWorkflows, executeSubmitFeedback, parseIntervention } from './tools.js';
+import { getOpenAIToolDefinitions, executeLookup, executeSearchDocs, executeSearchWorkflows, executeSubmitFeedback, parseIntervention, stripStrayMarkup } from './tools.js';
 import type { FeedbackContext } from './tools.js';
 
 const INTERVENTION_TOOL_NAMES = new Set(['highlight_element', 'deep_link', 'show_message', 'create_tour']);
@@ -29,6 +29,7 @@ You can also help users submit feedback:
 Answer the user's question using search_docs, lookup_functional_map, and search_workflows as needed.
 Be concise: 1-3 sentences max.
 No filler phrases. No "certainly" or "of course".
+NEVER write raw HTML/XML tags or markup in your reply text (e.g. an <a href> tag) — communicate navigation and highlights ONLY through tool calls, never by describing them inline as tags. If nothing in the selector reference matches, say so in plain language or use show_message — do not invent markup to compensate.
 
 Guidance rules:
 - ONLY use selectors from the "Selector reference" provided in the user message. NEVER invent or guess CSS selectors. If no selector matches, use show_message.
@@ -60,6 +61,7 @@ You can also help users submit feedback:
 Answer the user's question using search_docs, lookup_functional_map, and search_workflows as needed.
 Be concise: 1-3 sentences max.
 No filler phrases. No "certainly" or "of course".
+NEVER write raw HTML/XML tags or markup in your reply text (e.g. an <a href> tag) — communicate navigation and highlights ONLY through tool calls, never by describing them inline as tags. If nothing in the selector reference matches, say so in plain language or use show_message — do not invent markup to compensate.
 
 Guidance rules:
 - ONLY use identifiers from the "Selector reference" provided in the user message. NEVER invent or guess accessibility identifiers. If no identifier matches, use show_message.
@@ -92,6 +94,7 @@ You can also help users submit feedback:
 Answer the user's question using search_docs, lookup_functional_map, and search_workflows as needed.
 Be concise: 1-3 sentences max.
 No filler phrases. No "certainly" or "of course".
+NEVER write raw HTML/XML tags or markup in your reply text (e.g. an <a href> tag) — communicate navigation and highlights ONLY through tool calls, never by describing them inline as tags. If nothing in the selector reference matches, say so in plain language or use show_message — do not invent markup to compensate.
 
 Guidance rules:
 - ONLY use identifiers from the "Selector reference" provided in the user message. NEVER invent or guess view IDs or content descriptions. If no identifier matches, use show_message.
@@ -250,7 +253,7 @@ User question: ${message}`;
   }
 
   return {
-    reply: reply || "I couldn't find a specific answer. Could you give me more details?",
+    reply: stripStrayMarkup(reply) || "I couldn't find a specific answer. Could you give me more details?",
     intervention,
   };
 }

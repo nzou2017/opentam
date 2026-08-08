@@ -7,7 +7,7 @@ import { buildApp, SDK_KEY, SECRET_KEY, TENANT_ID, Q_ADMIN_SDK_KEY, Q_ADMIN_SECR
 import { getStore } from '../db/index.js';
 import { config } from '../config.js';
 import { resolveRagConfig, isRagConfiguredForTenant } from '../ingestion/ragConfig.js';
-import { executeSubmitFeedback } from '../agent/tools.js';
+import { executeSubmitFeedback, stripStrayMarkup } from '../agent/tools.js';
 
 let app: FastifyInstance;
 
@@ -1895,6 +1895,123 @@ describe('executeSubmitFeedback — context footer', () => {
     const created = requests.find(r => r.title === 'Great app');
     expect(created).toBeDefined();
     expect(created!.description).toBe('Love it!');
+  });
+});
+
+// ─────────────────────────────────────────────────
+// stripStrayMarkup — safety net for a model that writes a fake tool call
+// inline as HTML-ish markup instead of making a real tool call (observed
+// live with MiniMax when the functional map had nothing to ground a real
+// deep_link/highlight_element call in).
+// ─────────────────────────────────────────────────
+describe('stripStrayMarkup', () => {
+  it('strips a fake anchor tag the model wrote instead of calling a tool', () => {
+    const input = 'Sure thing.\n\n- <a href="ledgrify://transactions/add" message="Take you there" confidence="0.9"></a>\n\nWould you like that?';
+    const result = stripStrayMarkup(input);
+    expect(result).not.toContain('<a');
+    expect(result).not.toContain('href=');
+    expect(result).toContain('Sure thing.');
+    expect(result).toContain('Would you like that?');
+  });
+
+  it('leaves plain prose with a comparison operator untouched', () => {
+    expect(stripStrayMarkup('Enter an amount less than <100 to continue.')).toBe('Enter an amount less than <100 to continue.');
+  });
+
+  it('leaves well-formed replies with no markup completely unchanged', () => {
+    const clean = 'To add a transaction, tap the plus button in the top right.';
+    expect(stripStrayMarkup(clean)).toBe(clean);
+  });
+
+  it('collapses whitespace left behind after stripping tags', () => {
+    expect(stripStrayMarkup('Go here: <a href="x">click</a>  now.')).toBe('Go here: click now.');
+  });
+});
+
+// ─────────────────────────────────────────────────
+// executeSubmitFeedback — duplicate feature requests should add a vote to
+// the existing entry, not create a new one. Reproduces a real bug: asking
+// Q for the same feature across sessions created 3 separate entries
+// instead of one entry with 3 votes.
+// ─────────────────────────────────────────────────
+describe('executeSubmitFeedback — duplicate feature requests vote instead of duplicating', () => {
+  it('creates a new entry the first time, then votes on repeat submissions instead of duplicating', async () => {
+    const first = await executeSubmitFeedback(
+      { type: 'feature_request', title: 'CSV export', description: 'Request: let me export transactions as CSV.' },
+      TENANT_ID,
+      { sessionId: 'session-a' },
+    );
+    expect(first).toContain('submitted successfully');
+
+    // "Add CSV export" contains "CSV export" as a substring of the existing
+    // title — same matching rule the manual dashboard form already uses.
+    const second = await executeSubmitFeedback(
+      { type: 'feature_request', title: 'Add CSV export', description: 'Would love CSV export too.' },
+      TENANT_ID,
+      { sessionId: 'session-b' },
+    );
+    expect(second).toContain('added a vote');
+    expect(second).toContain('1 vote');
+
+    const third = await executeSubmitFeedback(
+      { type: 'feature_request', title: 'CSV export support', description: 'Please add CSV export.' },
+      TENANT_ID,
+      { sessionId: 'session-c' },
+    );
+    expect(third).toContain('added a vote');
+    expect(third).toContain('2 votes');
+
+    const requests = await getStore().getFeatureRequestsByTenantId(TENANT_ID, 'feature_request');
+    const matching = requests.filter(r => r.title.toLowerCase().includes('csv export'));
+    expect(matching).toHaveLength(1);
+    expect(matching[0].votes).toBe(2);
+  });
+
+  it('does not double-count a vote from the same session', async () => {
+    // First call creates the entry (0 votes, nothing to dedupe against yet).
+    await executeSubmitFeedback(
+      { type: 'feature_request', title: 'Add PDF export', description: 'Request: PDF export please.' },
+      TENANT_ID,
+      { sessionId: 'session-x' },
+    );
+    // Second call from the same session finds the duplicate and casts its
+    // first vote.
+    const secondCall = await executeSubmitFeedback(
+      { type: 'feature_request', title: 'Add PDF export', description: 'Same request again.' },
+      TENANT_ID,
+      { sessionId: 'session-x' },
+    );
+    expect(secondCall).toContain('added a vote');
+    // Third call from the same session again — already voted, must not
+    // double-count.
+    const thirdCall = await executeSubmitFeedback(
+      { type: 'feature_request', title: 'Add PDF export', description: 'Asking a third time.' },
+      TENANT_ID,
+      { sessionId: 'session-x' },
+    );
+    expect(thirdCall).toContain('already been voted for from this session');
+
+    const requests = await getStore().getFeatureRequestsByTenantId(TENANT_ID, 'feature_request');
+    const matching = requests.filter(r => r.title.toLowerCase().includes('pdf export'));
+    expect(matching).toHaveLength(1);
+    expect(matching[0].votes).toBe(1);
+  });
+
+  it('does not dedupe bug reports — near-identical reports each create their own entry', async () => {
+    await executeSubmitFeedback(
+      { type: 'bug_report', title: 'Save button unresponsive', description: 'Nothing happens on tap.' },
+      TENANT_ID,
+      { sessionId: 'session-y' },
+    );
+    await executeSubmitFeedback(
+      { type: 'bug_report', title: 'Save button unresponsive', description: 'Same issue on my device.' },
+      TENANT_ID,
+      { sessionId: 'session-z' },
+    );
+
+    const requests = await getStore().getFeatureRequestsByTenantId(TENANT_ID, 'bug_report');
+    const matching = requests.filter(r => r.title === 'Save button unresponsive');
+    expect(matching).toHaveLength(2);
   });
 });
 

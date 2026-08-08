@@ -189,6 +189,7 @@ export async function runInterventionAgent(
           screenName: event.screenName,
           appVersion: event.appVersion,
           deviceInfo: event.deviceInfo,
+          sessionId: event.sessionId,
         });
         toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
       }

@@ -13,6 +13,25 @@ export interface FeedbackContext {
   screenName?: string;
   appVersion?: string;
   deviceInfo?: DeviceInfo;
+  /** Used as the voter ID when a feature request turns out to be a duplicate — one vote per session, same dedup key the manual vote endpoint uses. */
+  sessionId?: string;
+}
+
+/**
+ * Safety net for a model that, instead of making a real tool call, writes
+ * a fake one inline as HTML-ish markup (e.g. `<a href="..." message="..."
+ * confidence="0.9"></a>`) — observed with smaller/less-instruction-tuned
+ * models when the functional map has nothing for them to ground a real
+ * tool call in. The system prompt now tells the model not to do this, but
+ * that's not a guarantee, so strip any tag-shaped text (`<word ...>` /
+ * `</word>`) before a reply ever reaches the client. Legitimate replies
+ * are plain prose per the prompt's own "be concise, no markdown" rule, so
+ * this never touches well-formed output — it only strips things that
+ * start with `<` followed by a letter, so a stray "<" used as a math
+ * comparison (e.g. "less than 100") is untouched.
+ */
+export function stripStrayMarkup(text: string): string {
+  return text.replace(/<\/?[a-zA-Z][^<>]*>/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
 export type ToolName = 'lookup_functional_map' | 'search_docs' | 'search_workflows' | 'highlight_element' | 'deep_link' | 'show_message' | 'create_tour' | 'submit_feedback';
@@ -434,6 +453,28 @@ export async function executeSubmitFeedback(
   const plan = (tenant?.plan ?? 'hobbyist') as 'hobbyist' | 'startup' | 'enterprise';
   if (!hasFeature(plan, 'feature_requests')) {
     return `Feedback submission (feature requests, bug reports, and feedback) is available on the Enterprise plan. Your current plan is "${plan}". To unlock this feature, contact q.cue.2026@gmail.com for an Enterprise license.`;
+  }
+
+  // Feature requests are counted demand, not incident reports — filing the
+  // same one repeatedly (across sessions, or a user asking again in a new
+  // conversation) should add a vote to the existing entry instead of
+  // creating a duplicate. Same case-insensitive substring match the manual
+  // dashboard form already uses for its own duplicate warning. Bug reports
+  // aren't deduped this way — near-identical reports from different
+  // sessions/devices are still useful signal on their own.
+  if (feedbackType === 'feature_request') {
+    const existing = await store.getFeatureRequestsByTenantId(tenantId, 'feature_request');
+    const titleLower = input.title.toLowerCase();
+    const duplicate = existing.find(r =>
+      r.title.toLowerCase().includes(titleLower) || titleLower.includes(r.title.toLowerCase())
+    );
+    if (duplicate) {
+      const voterId = context?.sessionId ?? `q-chat-agent-${Date.now()}`;
+      const { votes, alreadyVoted } = await store.voteFeatureRequest(duplicate.id, voterId);
+      return alreadyVoted
+        ? `This matches an existing request ("${duplicate.title}") that's already been voted for from this session — no new entry created. It's at ${votes} vote${votes === 1 ? '' : 's'}.`
+        : `This matches an existing request ("${duplicate.title}") — added a vote instead of creating a duplicate. It's now at ${votes} vote${votes === 1 ? '' : 's'}.`;
+    }
   }
 
   const id = `fr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

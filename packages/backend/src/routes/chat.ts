@@ -51,7 +51,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'Invalid request body', details: parsed.error.format() });
     }
 
-    const { message, currentUrl, history, platform, screenName, domSnapshot, appVersion, deviceInfo } = parsed.data;
+    const { message, currentUrl, history, platform, screenName, domSnapshot, appVersion, deviceInfo, sessionId } = parsed.data;
     const tenantId = tenant.id; // authoritative — resolved from SDK key
 
     const allEntries = await store.getMapEntriesByTenantId(tenantId);
@@ -60,7 +60,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     const model = tenant.model ?? MODEL_BY_PLAN[tenant.plan] ?? config.model;
 
     try {
-      const result = await runChatAgent(message, tenantId, currentUrl, entries, model, history, platform, domSnapshot, screenName, appVersion, deviceInfo);
+      const result = await runChatAgent(message, tenantId, currentUrl, entries, model, history, platform, domSnapshot, screenName, appVersion, deviceInfo, sessionId);
 
       // Record usage
       await store.recordUsage(tenantId, 'chat');
