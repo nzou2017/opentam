@@ -7,6 +7,7 @@ import { buildApp, SDK_KEY, SECRET_KEY, TENANT_ID, Q_ADMIN_SDK_KEY, Q_ADMIN_SECR
 import { getStore } from '../db/index.js';
 import { config } from '../config.js';
 import { resolveRagConfig, isRagConfiguredForTenant } from '../ingestion/ragConfig.js';
+import { executeSubmitFeedback } from '../agent/tools.js';
 
 let app: FastifyInstance;
 
@@ -642,6 +643,22 @@ describe('Workflows', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.workflows).toBeDefined();
+    expect(Array.isArray(body.workflows)).toBe(true);
+  });
+
+  it('GET /api/v1/workflows — works with a dashboard JWT session, not just a secret key', async () => {
+    // Dashboard browser sessions authenticate with a JWT (from login), never
+    // a static secret/SDK key — this endpoint must accept request.tenant as
+    // populated by the shared auth hook for JWTs, same as every other
+    // tenant-scoped route, or every logged-in dashboard user gets a 401.
+    const { token } = await registerAndGetToken(app);
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/workflows',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
     expect(Array.isArray(body.workflows)).toBe(true);
   });
 
@@ -1815,6 +1832,73 @@ describe('Feature Requests', () => {
 });
 
 // ─────────────────────────────────────────────────
+// executeSubmitFeedback — context auto-attachment. Called directly (not
+// through the chat endpoint, which would require a real/mocked LLM) since
+// this is the one piece of the chat-agent feedback-intake change that's
+// deterministic and worth unit-testing; whether the model actually asks a
+// good follow-up or declines to speculate on root cause is live LLM
+// judgment, verified separately against a real provider.
+// ─────────────────────────────────────────────────
+describe('executeSubmitFeedback — context footer', () => {
+  it('appends a context footer with every field when fully provided', async () => {
+    const result = await executeSubmitFeedback(
+      { type: 'bug_report', title: 'Crash on save', description: 'What happened:\nApp crashed when I tapped save.' },
+      TENANT_ID,
+      {
+        platform: 'ios',
+        currentUrl: 'ledgrify://transactions/new',
+        screenName: 'NewTransactionView',
+        appVersion: '2.3.1',
+        deviceInfo: { model: 'iPhone 15 Pro', os: 'iOS 18.2', screenSize: '393x852' },
+      },
+    );
+    expect(result).toContain('submitted successfully');
+
+    const requests = await getStore().getFeatureRequestsByTenantId(TENANT_ID, 'bug_report');
+    const created = requests.find(r => r.title === 'Crash on save');
+    expect(created).toBeDefined();
+    expect(created!.description).toContain('What happened:\nApp crashed when I tapped save.');
+    expect(created!.description).toContain('Context:');
+    expect(created!.description).toContain('Platform: ios');
+    expect(created!.description).toContain('Screen: NewTransactionView');
+    expect(created!.description).toContain('URL: ledgrify://transactions/new');
+    expect(created!.description).toContain('App version: 2.3.1');
+    expect(created!.description).toContain('Device: iPhone 15 Pro (iOS 18.2, 393x852)');
+  });
+
+  it('omits absent fields instead of printing them blank', async () => {
+    const result = await executeSubmitFeedback(
+      { type: 'feature_request', title: 'Export to CSV', description: 'Request: let me export transactions.' },
+      TENANT_ID,
+      { platform: 'web', currentUrl: 'https://app.example.com/transactions' },
+    );
+    expect(result).toContain('submitted successfully');
+
+    const requests = await getStore().getFeatureRequestsByTenantId(TENANT_ID, 'feature_request');
+    const created = requests.find(r => r.title === 'Export to CSV');
+    expect(created).toBeDefined();
+    expect(created!.description).toContain('Platform: web');
+    expect(created!.description).toContain('URL: https://app.example.com/transactions');
+    expect(created!.description).not.toContain('Screen:');
+    expect(created!.description).not.toContain('App version:');
+    expect(created!.description).not.toContain('Device:');
+  });
+
+  it('appends no context footer at all when no context is passed', async () => {
+    const result = await executeSubmitFeedback(
+      { type: 'positive_feedback', title: 'Great app', description: 'Love it!' },
+      TENANT_ID,
+    );
+    expect(result).toContain('submitted successfully');
+
+    const requests = await getStore().getFeatureRequestsByTenantId(TENANT_ID, 'positive_feedback');
+    const created = requests.find(r => r.title === 'Great app');
+    expect(created).toBeDefined();
+    expect(created!.description).toBe('Love it!');
+  });
+});
+
+// ─────────────────────────────────────────────────
 // Map Scoping (reference entries)
 // ─────────────────────────────────────────────────
 describe('Map Scoping', () => {
@@ -2324,7 +2408,11 @@ describe('Surveys', () => {
 // POST /api/v1/spider, which would trigger a real network crawl.
 // ─────────────────────────────────────────────────
 describe('Crawl Jobs (docs spider management)', () => {
-  async function seedJob(tenantId: string, status: 'running' | 'completed' | 'failed' | 'cancelled' = 'running') {
+  async function seedJob(
+    tenantId: string,
+    status: 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled' = 'running',
+    extra: { visitedUrls?: string[]; queueState?: { url: string; depth: number }[] } = {},
+  ) {
     const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     await getStore().createCrawlJob({
       id,
@@ -2337,6 +2425,8 @@ describe('Crawl Jobs (docs spider management)', () => {
       pagesQueued: 0,
       pagesFailed: 0,
       totalChunks: 0,
+      docsSkipped: 0,
+      ...extra,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -2428,6 +2518,87 @@ describe('Crawl Jobs (docs spider management)', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('POST /api/v1/spider/:jobId/pause — running job pauses, keeping its checkpoint', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'running', {
+      visitedUrls: ['https://example.com/docs/a'],
+      queueState: [{ url: 'https://example.com/docs/b', depth: 1 }],
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/spider/${jobId}/pause`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe('paused');
+    expect(body.visitedUrls).toEqual(['https://example.com/docs/a']);
+    expect(body.queueState).toEqual([{ url: 'https://example.com/docs/b', depth: 1 }]);
+  });
+
+  it('POST /api/v1/spider/:jobId/pause — 400 if not running', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'queued');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/spider/${jobId}/pause`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST /api/v1/spider/:jobId/resume — paused job goes back to queued, checkpoint intact', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'paused', {
+      visitedUrls: ['https://example.com/docs/a'],
+      queueState: [{ url: 'https://example.com/docs/b', depth: 1 }],
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/spider/${jobId}/resume`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe('queued');
+    expect(body.queueState).toEqual([{ url: 'https://example.com/docs/b', depth: 1 }]);
+  });
+
+  it('POST /api/v1/spider/:jobId/resume — 400 if not paused', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'running');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/spider/${jobId}/resume`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST /api/v1/spider — creates the job as queued, not running (the worker picks it up)', async () => {
+    const { token } = await registerAndGetToken(app);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/spider',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { rootUrl: 'https://example.com/docs' },
+    });
+    expect(res.statusCode).toBe(202);
+    const { jobId } = JSON.parse(res.body);
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/spider/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(JSON.parse(getRes.body).status).toBe('queued');
+  });
+
   it('viewer can list jobs but cannot cancel them', async () => {
     const { token: ownerToken, tenantId } = await registerAndGetToken(app, { email: `spider-owner-${Date.now()}@example.com` });
     const jobId = await seedJob(tenantId);
@@ -2471,8 +2642,9 @@ describe('Crawl Jobs (docs spider management)', () => {
 describe('GitHub Crawl Jobs', () => {
   async function seedJob(
     tenantId: string,
-    status: 'running' | 'completed' | 'failed' | 'cancelled' = 'running',
+    status: 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled' = 'running',
     candidates: any[] = [],
+    extra: { processedPaths?: string[] } = {},
   ) {
     const id = `ghjob-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     await getStore().createGithubCrawlJob({
@@ -2487,8 +2659,10 @@ describe('GitHub Crawl Jobs', () => {
       elementsFound: 0,
       docsIngested: 0,
       docsChunks: 0,
+      docsSkipped: 0,
       applied: 0,
       candidates: status === 'completed' ? candidates : undefined,
+      ...extra,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -2630,6 +2804,175 @@ describe('GitHub Crawl Jobs', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('POST /api/v1/crawl/jobs/:jobId/pause — running job pauses, keeping processedPaths', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'running', [], { processedPaths: ['src/App.tsx'] });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/crawl/jobs/${jobId}/pause`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe('paused');
+    expect(body.processedPaths).toEqual(['src/App.tsx']);
+  });
+
+  it('POST /api/v1/crawl/jobs/:jobId/pause — 400 if not running', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'queued');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/crawl/jobs/${jobId}/pause`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST /api/v1/crawl/jobs/:jobId/resume — paused job goes back to queued, processedPaths intact', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'paused', [], { processedPaths: ['src/App.tsx'] });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/crawl/jobs/${jobId}/resume`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe('queued');
+    expect(body.processedPaths).toEqual(['src/App.tsx']);
+  });
+
+  it('POST /api/v1/crawl/jobs/:jobId/resume — 400 if not paused', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const jobId = await seedJob(tenantId, 'running');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/crawl/jobs/${jobId}/resume`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST /api/v1/crawl/jobs — creates the job as queued, not running (the worker picks it up)', async () => {
+    const { token } = await registerAndGetToken(app);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/crawl/jobs',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { repoUrl: 'https://github.com/acme/widgets' },
+    });
+    expect(res.statusCode).toBe(202);
+    const { jobId } = JSON.parse(res.body);
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/crawl/jobs/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(JSON.parse(getRes.body).status).toBe('queued');
+  });
+});
+
+// ─────────────────────────────────────────────────
+// Job Queue — store-level behavior backing jobs/worker.ts: which jobs are
+// eligible for pickup, in what order, and how orphaned 'running' jobs from
+// a crashed/redeployed process get back into the queue. The worker's own
+// setInterval poll isn't exercised here (that would need real crawls); this
+// tests the store operations it's built on.
+// ─────────────────────────────────────────────────
+describe('Job Queue (store-level worker plumbing)', () => {
+  it('getQueuedCrawlJobs — returns queued spider jobs oldest-first, respecting the limit', async () => {
+    const { tenantId } = await registerAndGetToken(app);
+    const store = getStore();
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const id = `job-q-${Date.now()}-${i}`;
+      await store.createCrawlJob({
+        id, tenantId, rootUrl: 'https://example.com', maxPages: 50, maxDepth: 3, status: 'queued',
+        pagesIngested: 0, pagesQueued: 0, pagesFailed: 0, totalChunks: 0, docsSkipped: 0,
+        createdAt: new Date(Date.now() + i).toISOString(), updatedAt: new Date().toISOString(),
+      });
+      ids.push(id);
+    }
+    // A running job in between should never be picked up as queued.
+    await store.createCrawlJob({
+      id: `job-running-${Date.now()}`, tenantId, rootUrl: 'https://example.com', maxPages: 50, maxDepth: 3, status: 'running',
+      pagesIngested: 0, pagesQueued: 0, pagesFailed: 0, totalChunks: 0, docsSkipped: 0,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+
+    // The queue is global (any worker slot can pick up any tenant's job), so
+    // filter out whatever earlier tests in this shared in-memory store left
+    // queued and check relative ordering among just the ones seeded here.
+    const picked = await store.getQueuedCrawlJobs(1000);
+    const mine = picked.filter(j => ids.includes(j.id));
+    expect(mine.map(j => j.id)).toEqual(ids);
+    expect(mine.every(j => j.status === 'queued')).toBe(true);
+  });
+
+  it('getQueuedGithubCrawlJobs — returns queued GitHub jobs oldest-first, respecting the limit', async () => {
+    const { tenantId } = await registerAndGetToken(app);
+    const store = getStore();
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const id = `ghjob-q-${Date.now()}-${i}`;
+      await store.createGithubCrawlJob({
+        id, tenantId, repoUrl: 'https://github.com/acme/widgets', ingestDocs: true, autoApply: false, status: 'queued',
+        totalFiles: 0, filesProcessed: 0, elementsFound: 0, docsIngested: 0, docsChunks: 0, docsSkipped: 0, applied: 0,
+        createdAt: new Date(Date.now() + i).toISOString(), updatedAt: new Date().toISOString(),
+      });
+      ids.push(id);
+    }
+
+    const picked = await store.getQueuedGithubCrawlJobs(1000);
+    const mine = picked.filter(j => ids.includes(j.id));
+    expect(mine.map(j => j.id)).toEqual(ids);
+  });
+
+  it('requeueRunningCrawlJobs — flips orphaned running spider jobs back to queued, keeping their checkpoint', async () => {
+    const { tenantId } = await registerAndGetToken(app);
+    const store = getStore();
+    const id = `job-orphan-${Date.now()}`;
+    await store.createCrawlJob({
+      id, tenantId, rootUrl: 'https://example.com', maxPages: 50, maxDepth: 3, status: 'running',
+      pagesIngested: 3, pagesQueued: 2, pagesFailed: 0, totalChunks: 9, docsSkipped: 0,
+      visitedUrls: ['https://example.com/a'],
+      queueState: [{ url: 'https://example.com/b', depth: 1 }],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+
+    await store.requeueRunningCrawlJobs();
+
+    const job = await store.getCrawlJob(id);
+    expect(job?.status).toBe('queued');
+    expect(job?.visitedUrls).toEqual(['https://example.com/a']);
+    expect(job?.queueState).toEqual([{ url: 'https://example.com/b', depth: 1 }]);
+  });
+
+  it('requeueRunningGithubCrawlJobs — flips orphaned running GitHub jobs back to queued, keeping processedPaths', async () => {
+    const { tenantId } = await registerAndGetToken(app);
+    const store = getStore();
+    const id = `ghjob-orphan-${Date.now()}`;
+    await store.createGithubCrawlJob({
+      id, tenantId, repoUrl: 'https://github.com/acme/widgets', ingestDocs: true, autoApply: false, status: 'running',
+      totalFiles: 10, filesProcessed: 4, elementsFound: 2, docsIngested: 1, docsChunks: 3, docsSkipped: 0, applied: 0,
+      processedPaths: ['src/App.tsx', 'README.md'],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+
+    await store.requeueRunningGithubCrawlJobs();
+
+    const job = await store.getGithubCrawlJob(id);
+    expect(job?.status).toBe('queued');
+    expect(job?.processedPaths).toEqual(['src/App.tsx', 'README.md']);
   });
 });
 
