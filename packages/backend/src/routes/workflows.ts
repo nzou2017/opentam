@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { Workflow, WorkflowStep, WorkflowStatus } from '@opentam/shared';
 import { getStore } from '../db/index.js';
 import { logAudit } from '../middleware/audit.js';
+import type { AuthenticatedRequest } from '../middleware/auth.js';
 
 const WorkflowStepBody = z.object({
   id: z.string().min(1),
@@ -35,25 +36,11 @@ const UpdateStepsBody = z.object({
   steps: z.array(WorkflowStepBody).min(1),
 });
 
-async function getSecretKeyTenant(authHeader: string | undefined) {
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
-  const key = authHeader.slice('Bearer '.length).trim();
-  const store = getStore();
-  return (await store.getTenantBySecretKey(key)) ?? null;
-}
-
 async function getSdkKeyTenant(authHeader: string | undefined) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const key = authHeader.slice('Bearer '.length).trim();
   const store = getStore();
   return (await store.getTenantBySdkKey(key)) ?? null;
-}
-
-async function getAdminTenant(authHeader: string | undefined) {
-  // Accept either secret key or SDK key for admin routes
-  const tenant = await getSecretKeyTenant(authHeader);
-  if (tenant) return tenant;
-  return getSdkKeyTenant(authHeader);
 }
 
 function generateId(prefix: string): string {
@@ -62,8 +49,8 @@ function generateId(prefix: string): string {
 
 export async function workflowRoutes(app: FastifyInstance): Promise<void> {
   // List workflows
-  app.get('/api/v1/workflows', async (request, reply) => {
-    const tenant = await getAdminTenant(request.headers.authorization);
+  app.get('/api/v1/workflows', async (request: AuthenticatedRequest, reply) => {
+    const tenant = request.tenant;
     if (!tenant) return reply.code(401).send({ error: 'Unauthorized' });
 
     const query = request.query as Record<string, string>;
@@ -81,8 +68,8 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Get workflow with steps
-  app.get('/api/v1/workflows/:id', async (request, reply) => {
-    const tenant = await getAdminTenant(request.headers.authorization);
+  app.get('/api/v1/workflows/:id', async (request: AuthenticatedRequest, reply) => {
+    const tenant = request.tenant;
     if (!tenant) return reply.code(401).send({ error: 'Unauthorized' });
 
     const { id } = request.params as { id: string };
@@ -95,8 +82,8 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Create workflow + steps
-  app.post('/api/v1/workflows', async (request, reply) => {
-    const tenant = await getAdminTenant(request.headers.authorization);
+  app.post('/api/v1/workflows', async (request: AuthenticatedRequest, reply) => {
+    const tenant = request.tenant;
     if (!tenant) return reply.code(401).send({ error: 'Unauthorized' });
 
     const parsed = CreateWorkflowBody.safeParse(request.body);
@@ -140,8 +127,8 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Update workflow metadata
-  app.put('/api/v1/workflows/:id', async (request, reply) => {
-    const tenant = await getAdminTenant(request.headers.authorization);
+  app.put('/api/v1/workflows/:id', async (request: AuthenticatedRequest, reply) => {
+    const tenant = request.tenant;
     if (!tenant) return reply.code(401).send({ error: 'Unauthorized' });
 
     const { id } = request.params as { id: string };
@@ -158,8 +145,8 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Replace all steps
-  app.put('/api/v1/workflows/:id/steps', async (request, reply) => {
-    const tenant = await getAdminTenant(request.headers.authorization);
+  app.put('/api/v1/workflows/:id/steps', async (request: AuthenticatedRequest, reply) => {
+    const tenant = request.tenant;
     if (!tenant) return reply.code(401).send({ error: 'Unauthorized' });
 
     const { id } = request.params as { id: string };
@@ -196,8 +183,8 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Delete workflow + steps
-  app.delete('/api/v1/workflows/:id', async (request, reply) => {
-    const tenant = await getAdminTenant(request.headers.authorization);
+  app.delete('/api/v1/workflows/:id', async (request: AuthenticatedRequest, reply) => {
+    const tenant = request.tenant;
     if (!tenant) return reply.code(401).send({ error: 'Unauthorized' });
 
     const { id } = request.params as { id: string };
@@ -217,8 +204,8 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Publish workflow
-  app.post('/api/v1/workflows/:id/publish', async (request, reply) => {
-    const tenant = await getAdminTenant(request.headers.authorization);
+  app.post('/api/v1/workflows/:id/publish', async (request: AuthenticatedRequest, reply) => {
+    const tenant = request.tenant;
     if (!tenant) return reply.code(401).send({ error: 'Unauthorized' });
 
     const { id } = request.params as { id: string };
