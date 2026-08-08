@@ -247,6 +247,24 @@ User question: ${message}`;
     messages.push({ role: 'user', content: toolResults });
   }
 
+  // Guard: if the model emitted tool-call JSON as a text block, extract the
+  // human-readable `message` field rather than surfacing raw JSON to the user.
+  if (reply.startsWith('{') || reply.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(reply) as Record<string, unknown>;
+      if (typeof parsed.message === 'string' && parsed.message.trim()) {
+        reply = parsed.message.trim();
+        if (!intervention) {
+          intervention = parsed as unknown as InterventionCommand;
+        }
+      } else {
+        reply = '';
+      }
+    } catch {
+      reply = '';
+    }
+  }
+
   return {
     reply: reply || "I couldn't find a specific answer. Could you give me more details?",
     intervention,

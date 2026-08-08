@@ -229,6 +229,26 @@ User question: ${message}`;
     messages.push(...toolResults);
   }
 
+  // Some OpenAI-compatible models (e.g. MiniMax) emit tool-call JSON as plain
+  // text in `content` instead of using `tool_calls`. Detect and recover:
+  // extract the human-readable `message` field and treat the object as an
+  // intervention if we haven't captured one already.
+  if (reply.startsWith('{') || reply.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(reply) as Record<string, unknown>;
+      if (typeof parsed.message === 'string' && parsed.message.trim()) {
+        reply = parsed.message.trim();
+        if (!intervention) {
+          intervention = parsed as unknown as InterventionCommand;
+        }
+      } else {
+        reply = '';
+      }
+    } catch {
+      reply = '';
+    }
+  }
+
   return {
     reply: reply || "I couldn't find a specific answer. Could you give me more details?",
     intervention,
