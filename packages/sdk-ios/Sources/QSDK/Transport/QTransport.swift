@@ -25,6 +25,9 @@ final class QTransport {
     private let pathMonitor = NWPathMonitor()
     private var isConnected = true
 
+    /// Matches routes/attachments.ts's server-side cap.
+    private static let maxAttachmentBytes = 5 * 1024 * 1024
+
     init(sdkKey: String, backendUrl: String) {
         self.sdkKey = sdkKey
         self.backendUrl = backendUrl
@@ -77,6 +80,31 @@ final class QTransport {
         let data = try encoder.encode(body)
         let responseData = try await post(path: "/api/v1/chat", body: data)
         return try decoder.decode(ChatResponse.self, from: responseData)
+    }
+
+    // MARK: - Attachments (no retry — uploads happen in a user-gesture context, fail immediately)
+
+    /// Uploads a screenshot independently of any specific chat message — the
+    /// backend links it to whatever feature request the chat agent eventually
+    /// files for this session (see agent/tools.ts's executeSubmitFeedback on
+    /// the backend), which may be several turns later, or in response to a
+    /// follow-up question. No changes needed to sendChat for this to work.
+    func uploadAttachment(sessionId: String, imageData: Data, mimeType: String) async throws -> AttachmentUploadResponse {
+        // Matches the backend's own cap (routes/attachments.ts) — fail fast
+        // client-side instead of waiting on a network round-trip to find out.
+        guard imageData.count <= Self.maxAttachmentBytes else {
+            throw QTransportError.imageTooLarge
+        }
+
+        let body = AttachmentUploadRequest(
+            sessionId: sessionId,
+            imageBase64: imageData.base64EncodedString(),
+            mimeType: mimeType
+        )
+
+        let data = try encoder.encode(body)
+        let responseData = try await post(path: "/api/v1/attachments", body: data)
+        return try decoder.decode(AttachmentUploadResponse.self, from: responseData)
     }
 
     // MARK: - Telemetry (fire-and-forget with retry queue)
@@ -174,6 +202,7 @@ public enum QTransportError: Error, LocalizedError {
     case invalidURL
     case httpError(statusCode: Int)
     case offline
+    case imageTooLarge
 
     public var errorDescription: String? {
         switch self {
@@ -183,6 +212,8 @@ public enum QTransportError: Error, LocalizedError {
             return "HTTP \(code)"
         case .offline:
             return "No network connection"
+        case .imageTooLarge:
+            return "Image too large — max 5MB"
         }
     }
 }

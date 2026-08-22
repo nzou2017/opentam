@@ -95,6 +95,34 @@ public final class Q {
         )
     }
 
+    // MARK: - Attachments
+
+    /// Uploads a screenshot the user manually attached while describing a
+    /// bug (or feature request) through your own chat UI. Upload
+    /// independently of `Q.chat()` — the backend links it to whatever
+    /// feature request the chat agent eventually files for this session,
+    /// even if that happens a turn or two later (e.g. after the agent asks
+    /// a follow-up question first). No need to pass anything from this call
+    /// into `Q.chat()`.
+    ///
+    /// - Parameters:
+    ///   - imageData: Raw image bytes (e.g. `image.jpegData(compressionQuality: 0.8)`). Max 5MB.
+    ///   - mimeType: One of `"image/png"`, `"image/jpeg"`, `"image/webp"`, `"image/gif"`.
+    /// - Returns: A `QAttachmentUploadResponse` with the attachment's id and a URL you can use to preview it (e.g. in an `AsyncImage`).
+    public static func uploadAttachment(imageData: Data, mimeType: String) async throws -> QAttachmentUploadResponse {
+        guard let transport = shared.transport else {
+            throw QError.notInitialized
+        }
+
+        let response = try await transport.uploadAttachment(
+            sessionId: shared.state?.sessionId ?? UUID().uuidString,
+            imageData: imageData,
+            mimeType: mimeType
+        )
+
+        return QAttachmentUploadResponse(attachmentId: response.attachmentId, url: response.url)
+    }
+
     // MARK: - Interventions
 
     /// Execute an intervention returned by the backend (highlight, deep link, tour).
@@ -144,6 +172,14 @@ public struct QChatResponse {
     public let reply: String
     /// An optional intervention (highlight, tour, deep link) — execute via `Q.executeIntervention()`.
     public let intervention: InterventionCommand?
+}
+
+/// Response from `Q.uploadAttachment()`.
+public struct QAttachmentUploadResponse {
+    /// Opaque attachment id (informational — you don't need to do anything with it).
+    public let attachmentId: String
+    /// Publicly viewable URL for this image (no auth required to fetch it).
+    public let url: String
 }
 
 /// Q SDK errors.

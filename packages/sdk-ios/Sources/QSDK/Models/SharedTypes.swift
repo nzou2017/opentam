@@ -43,6 +43,20 @@ struct TelemetryRequest: Codable {
     let properties: [String: String]?
 }
 
+/// Matches routes/attachments.ts's UploadBody — base64-encoded image bytes,
+/// same binary-over-JSON approach used elsewhere in this SDK (no
+/// multipart/FormData anywhere, web SDK included).
+struct AttachmentUploadRequest: Codable {
+    let sessionId: String
+    let imageBase64: String
+    let mimeType: String
+}
+
+struct AttachmentUploadResponse: Codable {
+    let attachmentId: String
+    let url: String
+}
+
 // MARK: - Public types (host app can inspect these)
 
 /// An intervention command returned by the Q backend.
