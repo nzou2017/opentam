@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
-import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob } from './store.js';
+import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob, Attachment } from './store.js';
 
 class InMemoryStore implements Store {
   _needsAdminHash = false;
@@ -23,6 +23,7 @@ class InMemoryStore implements Store {
   private workflowStepsMap: Map<string, WorkflowStep[]> = new Map();
   private featureRequestsMap: Map<string, FeatureRequest> = new Map();
   private featureRequestVotesMap: Map<string, { featureRequestId: string; voterId: string }> = new Map();
+  private attachmentsMap: Map<string, Attachment> = new Map();
   private passwordResetTokensMap: Map<string, { userId: string; expiresAt: string }> = new Map();
   private teamInvitesMap: Map<string, TeamInvite> = new Map();
   private crawlJobsMap: Map<string, CrawlJob> = new Map();
@@ -777,6 +778,29 @@ class InMemoryStore implements Store {
     request.votes += 1;
     this.featureRequestsMap.set(id, request);
     return { votes: request.votes, alreadyVoted: false };
+  }
+
+  // ── Attachments ─────────────────────────────────────────────────────
+
+  async createAttachment(attachment: Attachment): Promise<void> {
+    this.attachmentsMap.set(attachment.id, { ...attachment });
+  }
+
+  async getAttachmentById(id: string): Promise<Attachment | undefined> {
+    return this.attachmentsMap.get(id);
+  }
+
+  async getUnlinkedAttachmentsBySession(tenantId: string, sessionId: string): Promise<Attachment[]> {
+    return [...this.attachmentsMap.values()].filter(
+      (a) => a.tenantId === tenantId && a.sessionId === sessionId && !a.featureRequestId,
+    );
+  }
+
+  async linkAttachmentsToFeatureRequest(ids: string[], featureRequestId: string): Promise<void> {
+    for (const id of ids) {
+      const attachment = this.attachmentsMap.get(id);
+      if (attachment) this.attachmentsMap.set(id, { ...attachment, featureRequestId });
+    }
   }
 
   // ── Audit logs ──────────────────────────────────────────────────────

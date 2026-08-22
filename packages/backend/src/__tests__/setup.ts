@@ -34,6 +34,7 @@ import { surveyRoutes } from '../routes/surveys.js';
 import { auditLogRoutes } from '../routes/auditLogs.js';
 import { spiderRoutes } from '../routes/spider.js';
 import { crawlRoutes } from '../routes/crawl.js';
+import { attachmentRoutes } from '../routes/attachments.js';
 import { initIntegrationBus } from '../integrations/bus.js';
 import { initLicense } from '../license.js';
 
@@ -82,6 +83,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(auditLogRoutes);
   await app.register(spiderRoutes);
   await app.register(crawlRoutes);
+  await app.register(attachmentRoutes);
 
   await app.ready();
   return app;

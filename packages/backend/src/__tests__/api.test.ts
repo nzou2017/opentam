@@ -2016,6 +2016,210 @@ describe('executeSubmitFeedback — duplicate feature requests vote instead of d
 });
 
 // ─────────────────────────────────────────────────
+// Attachments — screenshot uploads for chat-filed bug reports. Uploads are
+// independent of any specific chat turn (see routes/attachments.ts) and
+// get linked to a feature request lazily, by (tenantId, sessionId), once
+// executeSubmitFeedback actually files one.
+// ─────────────────────────────────────────────────
+
+// Smallest possible valid PNG (1x1 transparent pixel) — real image bytes,
+// not just an arbitrary string, so content-type/decoding logic is exercised
+// for real.
+const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+describe('Attachment store methods', () => {
+  it('creates, fetches, and links an attachment', async () => {
+    const store = getStore();
+    const attachment = {
+      id: `att-${Date.now()}`,
+      tenantId: TENANT_ID,
+      sessionId: 'store-test-session',
+      mimeType: 'image/png',
+      filename: 'test.png',
+      url: 'http://localhost:3001/api/v1/attachments/test',
+      createdAt: new Date().toISOString(),
+    };
+    await store.createAttachment(attachment);
+
+    const fetched = await store.getAttachmentById(attachment.id);
+    expect(fetched?.filename).toBe('test.png');
+    expect(fetched?.featureRequestId).toBeUndefined();
+
+    const unlinked = await store.getUnlinkedAttachmentsBySession(TENANT_ID, 'store-test-session');
+    expect(unlinked.map(a => a.id)).toContain(attachment.id);
+
+    await store.linkAttachmentsToFeatureRequest([attachment.id], 'fr-fake-id');
+    const afterLink = await store.getAttachmentById(attachment.id);
+    expect(afterLink?.featureRequestId).toBe('fr-fake-id');
+
+    const stillUnlinked = await store.getUnlinkedAttachmentsBySession(TENANT_ID, 'store-test-session');
+    expect(stillUnlinked.map(a => a.id)).not.toContain(attachment.id);
+  });
+
+  it('scopes unlinked lookups to the given tenant and session', async () => {
+    const store = getStore();
+    await store.createAttachment({
+      id: `att-other-${Date.now()}`,
+      tenantId: TENANT_ID,
+      sessionId: 'a-different-session',
+      mimeType: 'image/png',
+      filename: 'other.png',
+      url: 'http://localhost:3001/api/v1/attachments/other',
+      createdAt: new Date().toISOString(),
+    });
+
+    const unlinked = await store.getUnlinkedAttachmentsBySession(TENANT_ID, 'session-that-never-uploaded-anything');
+    expect(unlinked).toHaveLength(0);
+  });
+});
+
+describe('executeSubmitFeedback — links pending attachments', () => {
+  it('links an uploaded screenshot to a newly-filed bug report and includes its URL', async () => {
+    const store = getStore();
+    const sessionId = `attach-session-${Date.now()}`;
+    await store.createAttachment({
+      id: `att-link-${Date.now()}`,
+      tenantId: TENANT_ID,
+      sessionId,
+      mimeType: 'image/png',
+      filename: 'screenshot.png',
+      url: 'http://localhost:3001/api/v1/attachments/abc123',
+      createdAt: new Date().toISOString(),
+    });
+
+    const result = await executeSubmitFeedback(
+      { type: 'bug_report', title: 'Crash on checkout', description: 'What happened: app crashed.' },
+      TENANT_ID,
+      { sessionId },
+    );
+    expect(result).toContain('submitted successfully');
+
+    const requests = await getStore().getFeatureRequestsByTenantId(TENANT_ID, 'bug_report');
+    const created = requests.find(r => r.title === 'Crash on checkout');
+    expect(created?.description).toContain('Attachments:');
+    expect(created?.description).toContain('Screenshot: http://localhost:3001/api/v1/attachments/abc123');
+
+    // The attachment should now be linked — no longer shows up as unlinked.
+    const stillUnlinked = await store.getUnlinkedAttachmentsBySession(TENANT_ID, sessionId);
+    expect(stillUnlinked).toHaveLength(0);
+  });
+
+  it('links a pending attachment to the existing entry when a duplicate feature request just votes', async () => {
+    const store = getStore();
+    const sessionId = `attach-dup-session-${Date.now()}`;
+
+    // First filing creates the entry.
+    await executeSubmitFeedback(
+      { type: 'feature_request', title: 'Dark mode attach test', description: 'Please add dark mode.' },
+      TENANT_ID,
+      { sessionId: 'someone-elses-session' },
+    );
+
+    // Upload an attachment under a *different* session, then file the same
+    // request from that session — it should vote, not duplicate, and still
+    // pick up the attachment.
+    await store.createAttachment({
+      id: `att-dup-${Date.now()}`,
+      tenantId: TENANT_ID,
+      sessionId,
+      mimeType: 'image/png',
+      filename: 'mockup.png',
+      url: 'http://localhost:3001/api/v1/attachments/dup123',
+      createdAt: new Date().toISOString(),
+    });
+
+    const result = await executeSubmitFeedback(
+      { type: 'feature_request', title: 'Dark mode attach test', description: 'Here is a mockup.' },
+      TENANT_ID,
+      { sessionId },
+    );
+    expect(result).toContain('added a vote');
+
+    const requests = await getStore().getFeatureRequestsByTenantId(TENANT_ID, 'feature_request');
+    const created = requests.find(r => r.title === 'Dark mode attach test');
+    expect(created?.description).toContain('Screenshot: http://localhost:3001/api/v1/attachments/dup123');
+  });
+
+  it('does nothing when there is no pending attachment for the session', async () => {
+    const result = await executeSubmitFeedback(
+      { type: 'bug_report', title: 'No attachment bug', description: 'What happened: nothing broke, just testing.' },
+      TENANT_ID,
+      { sessionId: `no-attach-session-${Date.now()}` },
+    );
+    expect(result).toContain('submitted successfully');
+
+    const requests = await getStore().getFeatureRequestsByTenantId(TENANT_ID, 'bug_report');
+    const created = requests.find(r => r.title === 'No attachment bug');
+    expect(created?.description).not.toContain('Attachments:');
+  });
+});
+
+describe('POST /api/v1/attachments', () => {
+  it('401s without an SDK key', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/attachments',
+      payload: { sessionId: 's1', imageBase64: TINY_PNG_BASE64, mimeType: 'image/png' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('rejects an unsupported mime type', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/attachments',
+      headers: { authorization: `Bearer ${SDK_KEY}` },
+      payload: { sessionId: 's1', imageBase64: TINY_PNG_BASE64, mimeType: 'image/svg+xml' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects an image over the size cap', async () => {
+    // ~7MB of base64 — decodes to well over the 5MB limit.
+    const huge = 'A'.repeat(7 * 1024 * 1024);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/attachments',
+      headers: { authorization: `Bearer ${SDK_KEY}` },
+      payload: { sessionId: 's1', imageBase64: huge, mimeType: 'image/png' },
+    });
+    expect(res.statusCode).toBe(413);
+  });
+
+  it('uploads successfully and the file is servable via the returned URL', async () => {
+    const uploadRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/attachments',
+      headers: { authorization: `Bearer ${SDK_KEY}` },
+      payload: { sessionId: 's1', imageBase64: TINY_PNG_BASE64, mimeType: 'image/png' },
+    });
+    expect(uploadRes.statusCode).toBe(201);
+    const body = JSON.parse(uploadRes.body) as { attachmentId: string; url: string };
+    expect(body.attachmentId).toBeTruthy();
+    expect(body.url).toContain(`/api/v1/attachments/${body.attachmentId}`);
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/attachments/${body.attachmentId}`,
+      // Deliberately no Authorization header — the GET route must work
+      // without one, since a plain <img src> can't send one.
+    });
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.headers['content-type']).toBe('image/png');
+  });
+});
+
+describe('GET /api/v1/attachments/:id', () => {
+  it('404s for an unknown id', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/attachments/does-not-exist',
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+// ─────────────────────────────────────────────────
 // Map Scoping (reference entries)
 // ─────────────────────────────────────────────────
 describe('Map Scoping', () => {

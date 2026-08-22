@@ -11,6 +11,8 @@ dist/
 *.tsbuildinfo
 chroma_data/
 packages/backend/data/
+.build/
+.swiftpm/
 openclaw_knowledge/
 scripts/ingest-openclaw.sh
 plans/

@@ -17,6 +17,7 @@ services:
       - '3001:3001'
     volumes:
       - q_data:/app/data
+      - q_attachments:/app/attachments
     # Loads every var from the root .env as-is (only vars actually present
     # in the file get set) — this is what makes LLM_PROVIDER/LLM_API_KEY/
     # LLM_BASE_URL/GEMINI_*/MINIMAX_*/STT_* etc. (config.ts's provider
@@ -89,6 +90,7 @@ services:
 volumes:
   chroma_data:
   q_data:
+  q_attachments:
 
 networks:
   web:

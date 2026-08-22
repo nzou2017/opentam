@@ -31,6 +31,7 @@ import { pathRoutes } from './routes/paths.js';
 import { featureRequestRoutes } from './routes/featureRequests.js';
 import { surveyRoutes } from './routes/surveys.js';
 import { auditLogRoutes } from './routes/auditLogs.js';
+import { attachmentRoutes } from './routes/attachments.js';
 import { registerAuthHook } from './middleware/auth.js';
 import { initIntegrationBus } from './integrations/bus.js';
 import { seedQAdminDocs } from './seed/seedQAdminDocs.js';
@@ -50,6 +51,12 @@ async function bootstrap(): Promise<void> {
           },
         }
       : true,
+    // Traefik terminates TLS and forwards plain HTTP to this container —
+    // without this, request.protocol would report "http" even in
+    // production, which matters for building correct https:// attachment
+    // URLs (routes/attachments.ts) from the request's own host/protocol
+    // instead of a hardcoded config value.
+    trustProxy: true,
   });
 
   // Initialize store
@@ -107,6 +114,7 @@ async function bootstrap(): Promise<void> {
   await app.register(featureRequestRoutes);
   await app.register(surveyRoutes);
   await app.register(auditLogRoutes);
+  await app.register(attachmentRoutes);
 
   // Serve demo page
   const demoHtml = readFileSync(resolve(__dirname, 'public/demo.html'), 'utf-8');

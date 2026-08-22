@@ -1,4 +1,6 @@
 import { defineConfig } from 'vitest/config';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 export default defineConfig({
   test: {
@@ -23,6 +25,10 @@ export default defineConfig({
       // store.updateTenantSettings (see 'Per-Tenant RAG Config' tests).
       EMBEDDING_PROVIDER: '',
       OPENAI_API_KEY: '',
+      // routes/attachments.ts writes uploaded files to disk — keep test
+      // runs out of the repo's own working directory (its default) and
+      // off in the OS temp dir instead.
+      ATTACHMENTS_DIR: join(tmpdir(), 'opentam-test-attachments'),
     },
   },
 });

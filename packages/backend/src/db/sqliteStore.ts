@@ -3,9 +3,9 @@
 
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { eq, and, sql, gte, like, desc, asc } from 'drizzle-orm';
+import { eq, and, isNull, sql, gte, like, desc, asc } from 'drizzle-orm';
 import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
-import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob } from './store.js';
+import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob, Attachment } from './store.js';
 import * as schema from './schema.js';
 import { encrypt, decrypt } from '../crypto.js';
 
@@ -269,6 +269,18 @@ export class SqliteStore implements Store {
         voter_id TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS attachments (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        session_id TEXT NOT NULL,
+        feature_request_id TEXT REFERENCES feature_requests(id),
+        mime_type TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        url TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_attachments_session ON attachments(tenant_id, session_id, feature_request_id);
 
       CREATE INDEX IF NOT EXISTS idx_usage_records_tenant_type ON usage_records(tenant_id, type, created_at);
       CREATE INDEX IF NOT EXISTS idx_intervention_logs_tenant ON intervention_logs(tenant_id, created_at);
@@ -1429,6 +1441,55 @@ export class SqliteStore implements Store {
       .where(eq(schema.featureRequests.id, id)).run();
 
     return { votes: newVotes, alreadyVoted: false };
+  }
+
+  // ── Attachments ───────────────────────────────────────────────────────
+
+  async createAttachment(attachment: Attachment): Promise<void> {
+    this.db.insert(schema.attachments).values({
+      id: attachment.id,
+      tenantId: attachment.tenantId,
+      sessionId: attachment.sessionId,
+      featureRequestId: attachment.featureRequestId ?? null,
+      mimeType: attachment.mimeType,
+      filename: attachment.filename,
+      url: attachment.url,
+      createdAt: attachment.createdAt,
+    }).run();
+  }
+
+  async getAttachmentById(id: string): Promise<Attachment | undefined> {
+    const row = this.db.select().from(schema.attachments).where(eq(schema.attachments.id, id)).get();
+    return row ? this.toAttachment(row) : undefined;
+  }
+
+  async getUnlinkedAttachmentsBySession(tenantId: string, sessionId: string): Promise<Attachment[]> {
+    const rows = this.db.select().from(schema.attachments)
+      .where(and(
+        eq(schema.attachments.tenantId, tenantId),
+        eq(schema.attachments.sessionId, sessionId),
+        isNull(schema.attachments.featureRequestId),
+      )).all();
+    return rows.map((r) => this.toAttachment(r));
+  }
+
+  async linkAttachmentsToFeatureRequest(ids: string[], featureRequestId: string): Promise<void> {
+    for (const id of ids) {
+      this.db.update(schema.attachments).set({ featureRequestId }).where(eq(schema.attachments.id, id)).run();
+    }
+  }
+
+  private toAttachment(row: typeof schema.attachments.$inferSelect): Attachment {
+    return {
+      id: row.id,
+      tenantId: row.tenantId,
+      sessionId: row.sessionId,
+      featureRequestId: row.featureRequestId ?? undefined,
+      mimeType: row.mimeType,
+      filename: row.filename,
+      url: row.url,
+      createdAt: row.createdAt,
+    };
   }
 
   private toFeatureRequest(row: typeof schema.featureRequests.$inferSelect): FeatureRequest {

@@ -432,6 +432,28 @@ function formatContextFooter(context?: FeedbackContext): string {
   return `\n\n---\nContext:\n${lines.join('\n')}`;
 }
 
+/**
+ * Claims any screenshots the user uploaded during this session (see
+ * routes/attachments.ts — uploads happen independently of any specific
+ * chat turn, since filing may not happen until several turns later) and
+ * links them to whichever feature request just got filed or voted on.
+ * Returns a footer listing their URLs, or '' if there's nothing pending.
+ */
+async function linkPendingAttachments(
+  tenantId: string,
+  featureRequestId: string,
+  sessionId: string | undefined,
+): Promise<string> {
+  if (!sessionId) return '';
+  const { getStore } = await import('../db/index.js');
+  const store = getStore();
+  const pending = await store.getUnlinkedAttachmentsBySession(tenantId, sessionId);
+  if (pending.length === 0) return '';
+  await store.linkAttachmentsToFeatureRequest(pending.map((a) => a.id), featureRequestId);
+  const lines = pending.map((a) => `Screenshot: ${a.url}`);
+  return `\n\n---\nAttachments:\n${lines.join('\n')}`;
+}
+
 export async function executeSubmitFeedback(
   input: { type: string; title: string; description: string },
   tenantId: string,
@@ -471,6 +493,15 @@ export async function executeSubmitFeedback(
     if (duplicate) {
       const voterId = context?.sessionId ?? `q-chat-agent-${Date.now()}`;
       const { votes, alreadyVoted } = await store.voteFeatureRequest(duplicate.id, voterId);
+      // A screenshot attached while describing what turned out to be a
+      // duplicate is still useful evidence — link it to the existing
+      // entry and append it to that entry's description (the dashboard
+      // only looks for attachment URLs in description text, same as the
+      // newly-created-entry path below).
+      const attachmentFooter = await linkPendingAttachments(tenantId, duplicate.id, context?.sessionId);
+      if (attachmentFooter) {
+        await store.updateFeatureRequest(duplicate.id, tenantId, { description: duplicate.description + attachmentFooter });
+      }
       return alreadyVoted
         ? `This matches an existing request ("${duplicate.title}") that's already been voted for from this session — no new entry created. It's at ${votes} vote${votes === 1 ? '' : 's'}.`
         : `This matches an existing request ("${duplicate.title}") — added a vote instead of creating a duplicate. It's now at ${votes} vote${votes === 1 ? '' : 's'}.`;
@@ -491,6 +522,13 @@ export async function executeSubmitFeedback(
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
+
+  // Linking references this row by ID (foreign key), so it must happen
+  // after createFeatureRequest, not before.
+  const attachmentFooter = await linkPendingAttachments(tenantId, id, context?.sessionId);
+  if (attachmentFooter) {
+    await store.updateFeatureRequest(id, tenantId, { description: input.description + formatContextFooter(context) + attachmentFooter });
+  }
 
   const typeLabel = feedbackType === 'feature_request' ? 'Feature request' :
     feedbackType === 'bug_report' ? 'Bug report' : 'Feedback';

@@ -82,6 +82,19 @@ export interface GithubCrawlJob {
   updatedAt: string;
 }
 
+export interface Attachment {
+  id: string;
+  tenantId: string;
+  sessionId: string;
+  /** Set once linked to a filed feature request — null while it's just sitting there waiting to be claimed. */
+  featureRequestId?: string | null;
+  mimeType: string;
+  filename: string;
+  /** Full public URL, computed once at upload time from the request's own protocol/host — stored rather than re-derived later, since linking happens deep in agent/tools.ts with no access to a request object. */
+  url: string;
+  createdAt: string;
+}
+
 export interface TelemetryEventRecord {
   id: string;
   tenantId: string;
@@ -287,6 +300,12 @@ export interface Store {
   updateFeatureRequest(id: string, tenantId: string, patch: Partial<Omit<FeatureRequest, 'id' | 'tenantId'>>): Promise<FeatureRequest | undefined>;
   deleteFeatureRequest(id: string, tenantId: string): Promise<boolean>;
   voteFeatureRequest(id: string, voterId: string): Promise<{ votes: number; alreadyVoted: boolean }>;
+
+  // ── Attachments ──────────────────────────────────────────────────────
+  createAttachment(attachment: Attachment): Promise<void>;
+  getAttachmentById(id: string): Promise<Attachment | undefined>;
+  getUnlinkedAttachmentsBySession(tenantId: string, sessionId: string): Promise<Attachment[]>;
+  linkAttachmentsToFeatureRequest(ids: string[], featureRequestId: string): Promise<void>;
 
   // ── Surveys ─────────────────────────────────────────────────────────
   createSurvey(survey: SurveyDefinition): Promise<void>;

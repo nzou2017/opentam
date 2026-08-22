@@ -235,6 +235,25 @@ export const featureRequestVotes = sqliteTable('feature_request_votes', {
   createdAt: text('created_at').notNull(),
 });
 
+// User-uploaded screenshots for chat-filed bug reports. Uploaded
+// independently of any specific feature_request row (the chat agent may
+// not decide to file feedback until several turns later) and linked
+// lazily by (tenantId, sessionId) once a report is actually filed — see
+// executeSubmitFeedback in agent/tools.ts. `id` doubles as the access
+// token for the public GET route (long/random enough to be unguessable),
+// since browsers don't send Authorization headers on plain <img>/link
+// navigations.
+export const attachments = sqliteTable('attachments', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull().references(() => tenants.id),
+  sessionId: text('session_id').notNull(),
+  featureRequestId: text('feature_request_id').references(() => featureRequests.id),
+  mimeType: text('mime_type').notNull(),
+  filename: text('filename').notNull(),
+  url: text('url').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
 export const auditLogs = sqliteTable('audit_logs', {
   id: text('id').primaryKey(),
   tenantId: text('tenant_id').notNull(),
