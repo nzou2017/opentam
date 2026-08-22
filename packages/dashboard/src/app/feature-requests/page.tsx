@@ -38,6 +38,33 @@ const tabs: { label: string; type: FeedbackType }[] = [
   { label: 'Bug Reports', type: 'bug_report' },
 ];
 
+// ── Description rendering ────────────────────────────────────────────────────
+// Q's chat agent appends attached screenshots as plain "Screenshot: <url>"
+// lines in the description text (agent/tools.ts — no separate attachment
+// field on FeatureRequest, the relationship lives entirely in that text).
+// Render those specific lines as clickable thumbnails instead of a bare URL.
+
+const ATTACHMENT_LINE_RE = /^Screenshot: (https?:\/\/\S+)$/;
+
+function renderDescription(description: string) {
+  return description.split('\n').map((line, i) => {
+    const match = line.match(ATTACHMENT_LINE_RE);
+    if (match) {
+      const url = match[1];
+      return (
+        <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block">
+          <img
+            src={url}
+            alt="Attached screenshot"
+            className="max-h-48 rounded-md border border-gray-200 dark:border-gray-700 hover:opacity-90"
+          />
+        </a>
+      );
+    }
+    return <div key={i}>{line || ' '}</div>;
+  });
+}
+
 // ── Thumbs up icon ───────────────────────────────────────────────────────────
 
 function ThumbsUpIcon({ className }: { className?: string }) {
@@ -431,7 +458,7 @@ export default function FeatureRequestsPage() {
               </span>
             </div>
 
-            <p className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">{detailItem.description}</p>
+            <div className="text-sm text-gray-700 dark:text-gray-300">{renderDescription(detailItem.description)}</div>
 
             <p className="mt-4 text-xs text-gray-400 dark:text-gray-500">
               Submitted by {detailItem.submittedByEmail ?? detailItem.submittedBy} · {detailItem.votes} vote{detailItem.votes === 1 ? '' : 's'}
