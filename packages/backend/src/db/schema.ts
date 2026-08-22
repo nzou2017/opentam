@@ -251,6 +251,9 @@ export const attachments = sqliteTable('attachments', {
   mimeType: text('mime_type').notNull(),
   filename: text('filename').notNull(),
   url: text('url').notNull(),
+  // sha256 (hex) of the decoded image bytes — used to reject duplicate
+  // uploads within the same session (see routes/attachments.ts).
+  contentHash: text('content_hash'),
   createdAt: text('created_at').notNull(),
 });
 

@@ -3,15 +3,47 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getStore } from '../db/index.js';
+import { MAX_ATTACHMENTS_PER_REQUEST } from '../agent/tools.js';
 
 // Docker-mounted volume in production (see docker-compose.yml's
 // q_attachments volume) — falls back to a local dir for non-Docker dev.
 const ATTACHMENTS_DIR = process.env.ATTACHMENTS_DIR ?? join(process.cwd(), 'attachments');
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5MB decoded
+
+// ── Abuse protection ────────────────────────────────────────────────────────
+// Uploads are SDK-key authenticated but the key ships in every client bundle,
+// so a scraped key + a bot can still flood the endpoint. These caps bound the
+// blast radius: per-session pending backlog, plus sliding-window upload rates
+// per tenant and per client IP (catches one attacker rotating session IDs).
+export const MAX_PENDING_PER_SESSION = 2 * MAX_ATTACHMENTS_PER_REQUEST; // headroom above the per-bug cap
+const RATE_WINDOW_MS = 60_000;
+export const MAX_UPLOADS_PER_MIN_PER_TENANT = 30;
+export const MAX_UPLOADS_PER_MIN_PER_IP = 20;
+
+// In-memory sliding-window counters. Fine for a single-process deployment; a
+// multi-node setup would move these to Redis. Keyed by `tenant:<id>` / `ip:<ip>`.
+const uploadHits = new Map<string, number[]>();
+
+/** Records an upload attempt for `key` and returns true if it exceeds `limit` within the window. */
+function rateLimited(key: string, limit: number, now: number): boolean {
+  const recent = (uploadHits.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
+  if (recent.length >= limit) {
+    uploadHits.set(key, recent); // keep the trimmed window, don't add another hit
+    return true;
+  }
+  recent.push(now);
+  uploadHits.set(key, recent);
+  return false;
+}
+
+/** Test-only: clears the in-memory rate-limit window so limits don't bleed across test cases. */
+export function __resetAttachmentRateLimits(): void {
+  uploadHits.clear();
+}
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -41,9 +73,18 @@ export async function attachmentRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: 'Missing or invalid Authorization header' });
     }
     const sdkKey = authHeader.slice('Bearer '.length).trim();
-    const tenant = await getStore().getTenantBySdkKey(sdkKey);
+    const store = getStore();
+    const tenant = await store.getTenantBySdkKey(sdkKey);
     if (!tenant) {
       return reply.code(401).send({ error: 'Invalid SDK key' });
+    }
+
+    // Rate-limit before doing any real work, so a flood is cheap to reject.
+    const now = Date.now();
+    if (rateLimited(`tenant:${tenant.id}`, MAX_UPLOADS_PER_MIN_PER_TENANT, now) ||
+        rateLimited(`ip:${request.ip}`, MAX_UPLOADS_PER_MIN_PER_IP, now)) {
+      request.log.warn({ tenantId: tenant.id, ip: request.ip }, 'attachment upload rate limit exceeded');
+      return reply.code(429).send({ error: 'Too many uploads — slow down and try again shortly.' });
     }
 
     const parsed = UploadBody.safeParse(request.body);
@@ -60,6 +101,20 @@ export async function attachmentRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(413).send({ error: `Image too large — max ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB` });
     }
 
+    // Dedupe: if this exact image was already uploaded in this session, return
+    // the existing record instead of storing the bytes again. Guards against
+    // double-clicks and bots re-posting the same screenshot.
+    const contentHash = createHash('sha256').update(buffer).digest('hex');
+    const existing = await store.getAttachmentByHash(tenant.id, sessionId, contentHash);
+    if (existing) {
+      return reply.code(200).send({ attachmentId: existing.id, url: existing.url, deduplicated: true });
+    }
+
+    // Cap how many unclaimed screenshots a single session can accumulate.
+    if (await store.countPendingAttachmentsBySession(tenant.id, sessionId) >= MAX_PENDING_PER_SESSION) {
+      return reply.code(429).send({ error: `Too many pending screenshots for this session — max ${MAX_PENDING_PER_SESSION}.` });
+    }
+
     // Doubles as the access token for the public GET route below — long
     // and random enough to be unguessable.
     const id = randomBytes(24).toString('hex');
@@ -74,13 +129,14 @@ export async function attachmentRoutes(app: FastifyInstance): Promise<void> {
     // this from itself).
     const url = `${request.protocol}://${request.hostname}/api/v1/attachments/${id}`;
 
-    await getStore().createAttachment({
+    await store.createAttachment({
       id,
       tenantId: tenant.id,
       sessionId,
       mimeType,
       filename,
       url,
+      contentHash,
       createdAt: new Date().toISOString(),
     });
 

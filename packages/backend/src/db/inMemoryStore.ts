@@ -803,6 +803,22 @@ class InMemoryStore implements Store {
     }
   }
 
+  async getAttachmentByHash(tenantId: string, sessionId: string, contentHash: string): Promise<Attachment | undefined> {
+    return [...this.attachmentsMap.values()].find(
+      (a) => a.tenantId === tenantId && a.sessionId === sessionId && a.contentHash === contentHash,
+    );
+  }
+
+  async countAttachmentsForFeatureRequest(featureRequestId: string): Promise<number> {
+    return [...this.attachmentsMap.values()].filter((a) => a.featureRequestId === featureRequestId).length;
+  }
+
+  async countPendingAttachmentsBySession(tenantId: string, sessionId: string): Promise<number> {
+    return [...this.attachmentsMap.values()].filter(
+      (a) => a.tenantId === tenantId && a.sessionId === sessionId && !a.featureRequestId,
+    ).length;
+  }
+
   // ── Audit logs ──────────────────────────────────────────────────────
 
   async createAuditLog(entry: AuditLogEntry): Promise<void> {

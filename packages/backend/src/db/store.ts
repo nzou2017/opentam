@@ -92,6 +92,8 @@ export interface Attachment {
   filename: string;
   /** Full public URL, computed once at upload time from the request's own protocol/host — stored rather than re-derived later, since linking happens deep in agent/tools.ts with no access to a request object. */
   url: string;
+  /** sha256 (hex) of the decoded image bytes — used to dedupe re-uploads of the same screenshot within a session. Optional for backward compat with rows created before this column existed. */
+  contentHash?: string | null;
   createdAt: string;
 }
 
@@ -306,6 +308,12 @@ export interface Store {
   getAttachmentById(id: string): Promise<Attachment | undefined>;
   getUnlinkedAttachmentsBySession(tenantId: string, sessionId: string): Promise<Attachment[]>;
   linkAttachmentsToFeatureRequest(ids: string[], featureRequestId: string): Promise<void>;
+  /** Dedupe helper — returns any existing attachment with the same decoded-bytes hash already uploaded in this session (linked or not). */
+  getAttachmentByHash(tenantId: string, sessionId: string, contentHash: string): Promise<Attachment | undefined>;
+  /** How many attachments are already linked to a given feature request — used to enforce the per-bug cap. */
+  countAttachmentsForFeatureRequest(featureRequestId: string): Promise<number>;
+  /** How many uploaded-but-not-yet-claimed attachments a session is holding — used to cap runaway/bot uploads. */
+  countPendingAttachmentsBySession(tenantId: string, sessionId: string): Promise<number>;
 
   // ── Surveys ─────────────────────────────────────────────────────────
   createSurvey(survey: SurveyDefinition): Promise<void>;

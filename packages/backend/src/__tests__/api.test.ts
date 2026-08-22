@@ -1,13 +1,14 @@
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, SDK_KEY, SECRET_KEY, TENANT_ID, Q_ADMIN_SDK_KEY, Q_ADMIN_SECRET_KEY, Q_ADMIN_TENANT_ID, registerAndGetToken } from './setup.js';
 import { getStore } from '../db/index.js';
 import { config } from '../config.js';
 import { resolveRagConfig, isRagConfiguredForTenant } from '../ingestion/ragConfig.js';
-import { executeSubmitFeedback, stripStrayMarkup } from '../agent/tools.js';
+import { executeSubmitFeedback, stripStrayMarkup, MAX_ATTACHMENTS_PER_REQUEST } from '../agent/tools.js';
+import { __resetAttachmentRateLimits, MAX_PENDING_PER_SESSION, MAX_UPLOADS_PER_MIN_PER_IP } from '../routes/attachments.js';
 
 let app: FastifyInstance;
 
@@ -2155,6 +2156,10 @@ describe('executeSubmitFeedback — links pending attachments', () => {
 });
 
 describe('POST /api/v1/attachments', () => {
+  // All app.inject() calls share ip 127.0.0.1, so clear the rate-limit window
+  // between tests or the per-IP cap would bleed across cases.
+  beforeEach(() => __resetAttachmentRateLimits());
+
   it('401s without an SDK key', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -2216,6 +2221,113 @@ describe('GET /api/v1/attachments/:id', () => {
       url: '/api/v1/attachments/does-not-exist',
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+// ─────────────────────────────────────────────────
+// Attachment abuse protection — dedupe, per-session cap, per-bug cap,
+// and upload rate limiting (see routes/attachments.ts + agent/tools.ts).
+// ─────────────────────────────────────────────────
+describe('Attachment abuse protection', () => {
+  beforeEach(() => __resetAttachmentRateLimits());
+
+  const upload = (sessionId: string, imageBase64: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/attachments',
+      headers: { authorization: `Bearer ${SDK_KEY}` },
+      payload: { sessionId, imageBase64, mimeType: 'image/png' },
+    });
+
+  // Distinct, non-empty payloads so uploads aren't deduped against each other.
+  const distinctImage = (n: number) => Buffer.from(`distinct-image-${n}`).toString('base64');
+
+  it('dedupes an identical image re-uploaded in the same session', async () => {
+    const sessionId = `dedupe-${Date.now()}`;
+    const first = await upload(sessionId, TINY_PNG_BASE64);
+    expect(first.statusCode).toBe(201);
+    const firstId = JSON.parse(first.body).attachmentId;
+
+    const second = await upload(sessionId, TINY_PNG_BASE64);
+    expect(second.statusCode).toBe(200);
+    const secondBody = JSON.parse(second.body);
+    expect(secondBody.deduplicated).toBe(true);
+    expect(secondBody.attachmentId).toBe(firstId); // same record, not a new one
+
+    // Only one pending attachment exists for the session despite two uploads.
+    const pending = await getStore().getUnlinkedAttachmentsBySession(TENANT_ID, sessionId);
+    expect(pending).toHaveLength(1);
+  });
+
+  it('does NOT dedupe the same image across different sessions', async () => {
+    const a = await upload(`sess-a-${Date.now()}`, TINY_PNG_BASE64);
+    const b = await upload(`sess-b-${Date.now()}`, TINY_PNG_BASE64);
+    expect(a.statusCode).toBe(201);
+    expect(b.statusCode).toBe(201);
+    expect(JSON.parse(a.body).attachmentId).not.toBe(JSON.parse(b.body).attachmentId);
+  });
+
+  it('caps the number of pending screenshots per session', async () => {
+    const sessionId = `flood-${Date.now()}`;
+    for (let i = 0; i < MAX_PENDING_PER_SESSION; i++) {
+      const res = await upload(sessionId, distinctImage(i));
+      expect(res.statusCode).toBe(201);
+    }
+    // One past the cap → rejected.
+    const overflow = await upload(sessionId, distinctImage(999));
+    expect(overflow.statusCode).toBe(429);
+  });
+
+  it('rate-limits a flood of uploads from the same client', async () => {
+    // Each upload uses a fresh session (1 image each) so the per-session cap
+    // never trips — this isolates the per-IP rate limiter.
+    let sawRateLimit = false;
+    let firstStatus = 0;
+    for (let i = 0; i <= MAX_UPLOADS_PER_MIN_PER_IP + 1; i++) {
+      const res = await upload(`rl-sess-${i}-${Date.now()}`, TINY_PNG_BASE64);
+      if (i === 0) firstStatus = res.statusCode;
+      if (res.statusCode === 429) { sawRateLimit = true; break; }
+    }
+    expect(firstStatus).toBe(201);       // not limited from the start
+    expect(sawRateLimit).toBe(true);     // but a sustained flood is throttled
+  });
+
+  it('links at most MAX_ATTACHMENTS_PER_REQUEST screenshots to a single bug', async () => {
+    const store = getStore();
+    const sessionId = `cap-session-${Date.now()}`;
+    // Seed more pending attachments than the per-bug cap allows.
+    const total = MAX_ATTACHMENTS_PER_REQUEST + 1;
+    for (let i = 0; i < total; i++) {
+      await store.createAttachment({
+        id: `cap-att-${Date.now()}-${i}`,
+        tenantId: TENANT_ID,
+        sessionId,
+        mimeType: 'image/png',
+        filename: `shot-${i}.png`,
+        url: `http://localhost:3001/api/v1/attachments/cap${i}`,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    const result = await executeSubmitFeedback(
+      { type: 'bug_report', title: `Capped bug ${sessionId}`, description: 'What happened: too many shots.' },
+      TENANT_ID,
+      { sessionId },
+    );
+    expect(result).toContain('submitted successfully');
+
+    const requests = await store.getFeatureRequestsByTenantId(TENANT_ID, 'bug_report');
+    const created = requests.find(r => r.title === `Capped bug ${sessionId}`);
+    expect(created).toBeDefined();
+
+    // Exactly the cap number of screenshots got linked & listed — no more.
+    const screenshotLines = (created!.description.match(/^Screenshot: /gm) ?? []).length;
+    expect(screenshotLines).toBe(MAX_ATTACHMENTS_PER_REQUEST);
+    expect(await store.countAttachmentsForFeatureRequest(created!.id)).toBe(MAX_ATTACHMENTS_PER_REQUEST);
+
+    // The overflow attachment stays pending (unclaimed), not dropped.
+    const stillPending = await store.getUnlinkedAttachmentsBySession(TENANT_ID, sessionId);
+    expect(stillPending).toHaveLength(total - MAX_ATTACHMENTS_PER_REQUEST);
   });
 });
 

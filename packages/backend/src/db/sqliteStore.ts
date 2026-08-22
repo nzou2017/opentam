@@ -278,9 +278,11 @@ export class SqliteStore implements Store {
         mime_type TEXT NOT NULL,
         filename TEXT NOT NULL,
         url TEXT NOT NULL,
+        content_hash TEXT,
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_attachments_session ON attachments(tenant_id, session_id, feature_request_id);
+      CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(tenant_id, session_id, content_hash);
 
       CREATE INDEX IF NOT EXISTS idx_usage_records_tenant_type ON usage_records(tenant_id, type, created_at);
       CREATE INDEX IF NOT EXISTS idx_intervention_logs_tenant ON intervention_logs(tenant_id, created_at);
@@ -360,6 +362,7 @@ export class SqliteStore implements Store {
     addColumnIfMissing('github_crawl_jobs', 'processed_paths', 'TEXT');
     addColumnIfMissing('crawl_jobs', 'docs_skipped', 'INTEGER NOT NULL DEFAULT 0');
     addColumnIfMissing('github_crawl_jobs', 'docs_skipped', 'INTEGER NOT NULL DEFAULT 0');
+    addColumnIfMissing('attachments', 'content_hash', 'TEXT');
 
     // Embedding / vector store columns on tenants
     addColumnIfMissing('tenants', 'embedding_provider', 'TEXT');
@@ -1454,6 +1457,7 @@ export class SqliteStore implements Store {
       mimeType: attachment.mimeType,
       filename: attachment.filename,
       url: attachment.url,
+      contentHash: attachment.contentHash ?? null,
       createdAt: attachment.createdAt,
     }).run();
   }
@@ -1479,6 +1483,30 @@ export class SqliteStore implements Store {
     }
   }
 
+  async getAttachmentByHash(tenantId: string, sessionId: string, contentHash: string): Promise<Attachment | undefined> {
+    const row = this.db.select().from(schema.attachments)
+      .where(and(
+        eq(schema.attachments.tenantId, tenantId),
+        eq(schema.attachments.sessionId, sessionId),
+        eq(schema.attachments.contentHash, contentHash),
+      )).get();
+    return row ? this.toAttachment(row) : undefined;
+  }
+
+  async countAttachmentsForFeatureRequest(featureRequestId: string): Promise<number> {
+    return this.db.select().from(schema.attachments)
+      .where(eq(schema.attachments.featureRequestId, featureRequestId)).all().length;
+  }
+
+  async countPendingAttachmentsBySession(tenantId: string, sessionId: string): Promise<number> {
+    return this.db.select().from(schema.attachments)
+      .where(and(
+        eq(schema.attachments.tenantId, tenantId),
+        eq(schema.attachments.sessionId, sessionId),
+        isNull(schema.attachments.featureRequestId),
+      )).all().length;
+  }
+
   private toAttachment(row: typeof schema.attachments.$inferSelect): Attachment {
     return {
       id: row.id,
@@ -1488,6 +1516,7 @@ export class SqliteStore implements Store {
       mimeType: row.mimeType,
       filename: row.filename,
       url: row.url,
+      contentHash: row.contentHash ?? undefined,
       createdAt: row.createdAt,
     };
   }

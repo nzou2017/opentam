@@ -6,6 +6,9 @@ import type OpenAI from 'openai';
 import type { FunctionalMapEntry, Platform, DeviceInfo } from '@opentam/shared';
 import { config } from '../config.js';
 
+/** Hard ceiling on screenshots linked to a single bug/feature request (product requirement: fewer than 5 per bug). */
+export const MAX_ATTACHMENTS_PER_REQUEST = 4;
+
 /** Context auto-attached to filed feedback — whatever the client sent on this chat request, not asked of the user. */
 export interface FeedbackContext {
   platform?: Platform;
@@ -449,8 +452,18 @@ async function linkPendingAttachments(
   const store = getStore();
   const pending = await store.getUnlinkedAttachmentsBySession(tenantId, sessionId);
   if (pending.length === 0) return '';
-  await store.linkAttachmentsToFeatureRequest(pending.map((a) => a.id), featureRequestId);
-  const lines = pending.map((a) => `Screenshot: ${a.url}`);
+
+  // Cap the number of screenshots attached to any single bug. The count is
+  // checked against what's ALREADY linked (a duplicate report that just votes
+  // claims pending attachments too, across several turns), so the ceiling
+  // holds even when attachments accrue over multiple submissions.
+  const alreadyLinked = await store.countAttachmentsForFeatureRequest(featureRequestId);
+  const room = MAX_ATTACHMENTS_PER_REQUEST - alreadyLinked;
+  if (room <= 0) return '';
+
+  const toLink = pending.slice(0, room);
+  await store.linkAttachmentsToFeatureRequest(toLink.map((a) => a.id), featureRequestId);
+  const lines = toLink.map((a) => `Screenshot: ${a.url}`);
   return `\n\n---\nAttachments:\n${lines.join('\n')}`;
 }
 
