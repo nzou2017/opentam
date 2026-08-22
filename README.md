@@ -26,6 +26,7 @@ Q is an open-source AI agent that detects user frustration in real-time — rage
 - **Workflow engine** — define multi-step walkthroughs; the agent matches and launches them automatically
 - **Voice input** — speech-to-text via any OpenAI-compatible STT endpoint
 - **Surveys & feedback** — collect structured feedback triggered by interventions or frustration events
+- **Screenshot attachments** — users can attach an image while reporting a bug through chat (web + iOS; Android not yet); the agent links it to whatever feature request/bug report it ends up filing
 - **Multi-tenant** — team management, RBAC (owner/admin/viewer), SSO, TOTP 2FA, audit logs
 - **Bring your own LLM** — works with Anthropic, OpenAI, Gemini, DeepSeek, Groq, Ollama, and more
 - **MCP server** — populate Q's knowledge base directly from AI agent workflows

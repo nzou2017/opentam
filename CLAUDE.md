@@ -15,6 +15,8 @@ pnpm + Turborepo monorepo. All packages live under `packages/`:
 | `backend` | Fastify API server — the core backend |
 | `dashboard` | Next.js admin portal |
 | `sdk` | Vanilla JS client SDK (<20kb), bundles to `dist/q.min.js` |
+| `sdk-ios` | Swift SDK (headless — host app builds its own chat UI, calls `Q.chat()`/`Q.uploadAttachment()`) |
+| `sdk-android` | Kotlin SDK (headless, same shape as `sdk-ios`; screenshot attachment upload not yet ported here) |
 | `shared` | Shared TypeScript types consumed by all packages |
 | `mcp` | Model Context Protocol server (crawl repos, ingest docs via AI agents) |
 | `proxy` | Q-Proxy reverse proxy for sales demos |
@@ -76,7 +78,15 @@ STT (speech-to-text) uses the same OpenAI-compatible interface; configured via `
 
 ### SDK internals
 
-`Q.init(sdkKey, options)` wires together: `Observer` → detects frustration → `QUI.showGreeting()`. The chat widget (`QUI`) lets users chat; messages go via `Transport` to `POST /api/v1/chat`. `DOMMapper` auto-discovers UI elements and reports them to the backend's functional map. `PathRecorder` sends session navigation paths.
+`Q.init(sdkKey, options)` wires together: `Observer` → detects frustration → `QUI.showGreeting()`. The chat widget (`QUI`) lets users chat; messages go via `Transport` to `POST /api/v1/chat`. `DOMMapper` auto-discovers UI elements and reports them to the backend's functional map. `PathRecorder` sends session navigation paths. `QUI` also has an attach button (paperclip icon, next to the mic button) — clicking it uploads an image immediately via `Transport.uploadAttachment()` to `POST /api/v1/attachments`; the backend links it to whatever feature request the chat agent eventually files for that session (see "Feedback & attachments" below).
+
+### Mobile SDKs (`sdk-ios`, `sdk-android`)
+
+Both are **headless** — no chat UI is provided. The host app builds its own UI and calls `Q.chat(message)` (Swift) to get a reply + optional `InterventionCommand`, then `Q.executeIntervention(...)` to run it. `QTransport` in each mirrors the web `Transport`'s methods (`sendChat`, `sendTelemetry`, and — iOS only, so far — `uploadAttachment`) against the same backend endpoints; there's no separate mobile-specific API. Screenshot attachment (`Q.uploadAttachment(imageData:mimeType:)`) is implemented in `sdk-ios` only — `sdk-android`'s `QTransport.kt` doesn't have an equivalent yet.
+
+### Feedback & attachments
+
+The chat agent (`agent/tools.ts`'s `submit_feedback` tool) files bug reports/feature requests into the `feature_requests` table, asking at most one follow-up question first if the report is too thin to be useful, and auto-attaching platform/screen/URL/device context. Screenshots are uploaded independently of any specific chat turn — `POST /api/v1/attachments` (SDK-key auth, 5MB cap, images only) stores the file under `ATTACHMENTS_DIR` (defaults to `./attachments`; the Docker image mounts this as the `q_attachments` volume) and returns an unguessable ID that doubles as the access token for the public, unauthenticated `GET /api/v1/attachments/:id`. `executeSubmitFeedback` claims any attachments uploaded during the same `(tenantId, sessionId)` the moment it actually files or votes on a feature request — which may be several chat turns after the image was attached.
 
 ### MCP server
 
