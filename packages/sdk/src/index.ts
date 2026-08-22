@@ -108,6 +108,9 @@ const Q = {
       onTranscribe: (audioBase64: string, mimeType: string) => {
         return transport!.sendTranscribe(audioBase64, mimeType);
       },
+      onUploadAttachment: (imageBase64: string, mimeType: string) => {
+        return transport!.uploadAttachment(imageBase64, mimeType);
+      },
     });
 
     pathRecorder = new PathRecorder((events) => {

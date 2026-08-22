@@ -11,6 +11,7 @@ export interface UICallbacks {
   onAction: (command: InterventionCommand) => void;
   onSendMessage: (text: string, history: { role: 'user' | 'assistant'; content: string }[]) => Promise<{ reply: string; intervention?: InterventionCommand } | null>;
   onTranscribe: (audioBase64: string, mimeType: string) => Promise<string | null>;
+  onUploadAttachment: (imageBase64: string, mimeType: string) => Promise<{ attachmentId: string; url: string } | null>;
 }
 
 const ROOT_ID = 'q-chat-root';
@@ -447,10 +448,48 @@ const CSS = `
     0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); }
     50%       { box-shadow: 0 0 0 5px rgba(239,68,68,0); }
   }
+
+  /* Attach button */
+  #q-attach-btn {
+    width: 36px; height: 36px;
+    background: transparent;
+    border: 1.5px solid var(--q-input-border);
+    border-radius: 9px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    color: var(--q-placeholder);
+    padding: 0;
+  }
+  #q-attach-btn:hover { border-color: var(--q-accent); color: var(--q-accent); transform: scale(1.05); }
+  #q-attach-btn.attached { border-color: var(--q-accent); color: var(--q-accent); background: var(--q-accent-muted); }
+  #q-attach-btn:disabled { cursor: default; opacity: 0.6; }
+
+  /* "1 image attached" chip, shown above the input row while pending */
+  #q-attachment-chip {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    margin: 0 12px 8px;
+    padding: 5px 9px;
+    border-radius: 8px;
+    background: var(--q-accent-muted);
+    color: var(--q-accent);
+    font-size: 12px;
+    width: fit-content;
+  }
+  #q-attachment-chip.visible { display: flex; }
+  #q-attachment-chip button {
+    background: none; border: none; cursor: pointer; color: inherit;
+    padding: 0; font-size: 14px; line-height: 1; opacity: 0.7;
+  }
+  #q-attachment-chip button:hover { opacity: 1; }
 `;
 
 const MIC_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>`;
 const STOP_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>`;
+const PAPERCLIP_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`;
 
 // Web Speech API shim — Chrome/Edge use the prefixed version
 type SpeechRecognitionCtor = typeof SpeechRecognition;
@@ -493,12 +532,17 @@ export class QUI {
   private inputEl: HTMLTextAreaElement | null = null;
   private sendBtn: HTMLButtonElement | null = null;
   private micBtn: HTMLButtonElement | null = null;
+  private attachBtn: HTMLButtonElement | null = null;
+  private fileInput: HTMLInputElement | null = null;
+  private attachmentChip: HTMLElement | null = null;
   private toggleBtn: HTMLButtonElement | null = null;
   private layoutBtn: HTMLButtonElement | null = null;
   private callbacks: UICallbacks;
   private chatHistory: { role: 'user' | 'assistant'; content: string }[] = [];
+  private pendingAttachment: { id: string; url: string } | null = null;
   private isOpen = false;
   private isSending = false;
+  private isUploadingAttachment = false;
   private themeObserver: MutationObserver | null = null;
   private layout: 'popup' | 'panel';
   private state: QState | null;
@@ -610,6 +654,12 @@ export class QUI {
     panel.appendChild(msgs);
     this.messagesEl = msgs;
 
+    // Pending-attachment chip (shown above the input row once an image is attached)
+    const attachmentChip = document.createElement('div');
+    attachmentChip.id = 'q-attachment-chip';
+    this.attachmentChip = attachmentChip;
+    panel.appendChild(attachmentChip);
+
     // Input area
     const inputArea = document.createElement('div');
     inputArea.id = 'q-input-area';
@@ -644,7 +694,27 @@ export class QUI {
     micBtn.addEventListener('click', () => this.toggleRecording());
     this.micBtn = micBtn;
 
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/png,image/jpeg,image/webp,image/gif';
+    fileInput.style.display = 'none';
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files?.[0];
+      if (file) this.handleAttachmentSelected(file);
+      fileInput.value = ''; // allow re-selecting the same file later
+    });
+    this.fileInput = fileInput;
+
+    const attachBtn = document.createElement('button');
+    attachBtn.id = 'q-attach-btn';
+    attachBtn.title = 'Attach a screenshot';
+    attachBtn.innerHTML = PAPERCLIP_ICON;
+    attachBtn.addEventListener('click', () => fileInput.click());
+    this.attachBtn = attachBtn;
+
     inputArea.appendChild(input);
+    inputArea.appendChild(attachBtn);
+    inputArea.appendChild(fileInput);
     inputArea.appendChild(micBtn);
     inputArea.appendChild(sendBtn);
     panel.appendChild(inputArea);
@@ -704,6 +774,10 @@ export class QUI {
     this.inputEl = null;
     this.sendBtn = null;
     this.micBtn = null;
+    this.attachBtn = null;
+    this.fileInput = null;
+    this.attachmentChip = null;
+    this.pendingAttachment = null;
     this.toggleBtn = null;
     this.layoutBtn = null;
 
@@ -895,6 +969,12 @@ export class QUI {
 
     this.appendMessage({ role: 'user', text });
     this.chatHistory.push({ role: 'user', content: text });
+    // The backend links any pending attachment to whatever feature request
+    // this turn (or a later one, if the agent asks a follow-up first) ends
+    // up filing, by session — nothing needs to be sent alongside the
+    // message itself. Clear the chip now so it doesn't look attached to
+    // an unrelated later message.
+    if (this.pendingAttachment) this.clearPendingAttachment();
     const typing = this.showTyping();
 
     const result = await this.callbacks.onSendMessage(text, this.chatHistory.slice(0, -1));
@@ -1094,6 +1174,69 @@ export class QUI {
       if (this.inputEl) this.inputEl.placeholder = 'Ask me anything…';
     }
     this.mediaRecorder = null;
+  }
+
+  private static readonly MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // matches routes/attachments.ts's server-side cap
+
+  private async handleAttachmentSelected(file: File): Promise<void> {
+    if (this.isUploadingAttachment) return;
+    if (file.size > QUI.MAX_ATTACHMENT_BYTES) {
+      this.showMicError('Image too large — max 5MB');
+      return;
+    }
+
+    this.isUploadingAttachment = true;
+    if (this.attachBtn) this.attachBtn.disabled = true;
+
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      // Strip the "data:image/png;base64," prefix — the backend only wants raw base64.
+      const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+
+      const result = await this.callbacks.onUploadAttachment(base64, file.type);
+      if (!result) {
+        this.showMicError('Upload failed — try again');
+        return;
+      }
+
+      this.pendingAttachment = { id: result.attachmentId, url: result.url };
+      this.showAttachmentChip(file.name);
+    } catch {
+      this.showMicError('Upload failed — try again');
+    } finally {
+      this.isUploadingAttachment = false;
+      if (this.attachBtn) this.attachBtn.disabled = false;
+    }
+  }
+
+  private showAttachmentChip(filename: string): void {
+    if (!this.attachmentChip) return;
+    this.attachBtn?.classList.add('attached');
+    this.attachmentChip.innerHTML = '';
+
+    const label = document.createElement('span');
+    label.textContent = `📎 ${filename}`;
+    this.attachmentChip.appendChild(label);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.innerHTML = '&times;';
+    removeBtn.title = 'Remove attachment';
+    removeBtn.addEventListener('click', () => this.clearPendingAttachment());
+    this.attachmentChip.appendChild(removeBtn);
+
+    this.attachmentChip.classList.add('visible');
+  }
+
+  private clearPendingAttachment(): void {
+    this.pendingAttachment = null;
+    this.attachBtn?.classList.remove('attached');
+    this.attachmentChip?.classList.remove('visible');
+    if (this.attachmentChip) this.attachmentChip.innerHTML = '';
   }
 
   private showMicError(msg: string): void {

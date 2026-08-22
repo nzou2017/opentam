@@ -134,6 +134,31 @@ export class Transport {
     }
   }
 
+  /**
+   * Uploads a screenshot the user manually attached while reporting a
+   * bug. Uploads immediately (not deferred to send) and independently of
+   * any specific chat message — the backend links it to whatever feature
+   * request ends up getting filed for this session, whenever that
+   * happens (see routes/attachments.ts).
+   */
+  async uploadAttachment(imageBase64: string, mimeType: string): Promise<{ attachmentId: string; url: string } | null> {
+    try {
+      const response = await fetch(`${this.config.backendUrl}/api/v1/attachments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.config.sdkKey}`,
+        },
+        body: JSON.stringify({ sessionId: this.config.sessionId, imageBase64, mimeType }),
+      });
+      if (!response.ok) throw new Error(`Attachment upload returned ${response.status}`);
+      return (await response.json()) as { attachmentId: string; url: string };
+    } catch (err) {
+      console.warn('[Q] Attachment upload failed:', err);
+      return null;
+    }
+  }
+
   async sendSessionPath(events: Array<{ url: string; selector: string; timestamp: number }>): Promise<void> {
     try {
       await fetch(`${this.config.backendUrl}/api/v1/paths`, {
