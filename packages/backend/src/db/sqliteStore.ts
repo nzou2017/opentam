@@ -282,7 +282,6 @@ export class SqliteStore implements Store {
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_attachments_session ON attachments(tenant_id, session_id, feature_request_id);
-      CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(tenant_id, session_id, content_hash);
 
       CREATE INDEX IF NOT EXISTS idx_usage_records_tenant_type ON usage_records(tenant_id, type, created_at);
       CREATE INDEX IF NOT EXISTS idx_intervention_logs_tenant ON intervention_logs(tenant_id, created_at);
@@ -363,6 +362,12 @@ export class SqliteStore implements Store {
     addColumnIfMissing('crawl_jobs', 'docs_skipped', 'INTEGER NOT NULL DEFAULT 0');
     addColumnIfMissing('github_crawl_jobs', 'docs_skipped', 'INTEGER NOT NULL DEFAULT 0');
     addColumnIfMissing('attachments', 'content_hash', 'TEXT');
+    // Must run after the ALTER above — on a pre-existing attachments table
+    // (any deployment that already had this feature before content_hash was
+    // added), creating this index inline with the CREATE TABLE block failed
+    // outright with "no such column: content_hash", since CREATE TABLE IF
+    // NOT EXISTS no-ops on an existing table and never adds the column.
+    driver.exec(`CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(tenant_id, session_id, content_hash);`);
 
     // Embedding / vector store columns on tenants
     addColumnIfMissing('tenants', 'embedding_provider', 'TEXT');
