@@ -67,6 +67,12 @@ export interface Tenant {
   licenseKey?: string;
   /** ISO expiry of the activated license key. Past this date, plan is treated as expired. */
   licenseExpiresAt?: string;
+  /**
+   * Opaque token used to renew this tenant's license with the license server
+   * before {@link licenseExpiresAt}. Set when the tenant is provisioned in
+   * SaaS mode; consumed by the per-tenant license-refresh scheduler.
+   */
+  licenseRefreshToken?: string;
 }
 
 // FunctionalMapEntry

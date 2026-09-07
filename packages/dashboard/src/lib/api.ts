@@ -4,12 +4,16 @@
 import type { FunctionalMapEntry, InterventionLog, FeatureRequest, FeedbackType, FeatureRequestStatus, SurveyDefinition, SurveyResponse, SurveyQuestion, Feature } from '@opentam/shared';
 import { backendConfig } from './config';
 
-const { backendUrl, secretKey, sdkKey } = backendConfig;
+const { backendUrl } = backendConfig;
 
 function getAuthHeaders(token?: string | null): Record<string, string> {
-  // Prefer JWT token, fall back to secret key
-  const bearer = token ?? secretKey;
-  return bearer ? { Authorization: `Bearer ${bearer}` } : {};
+  // SECURITY: never fall back to a shared secret/SDK key here. That key
+  // resolves (via getTenantBySecretKey) to the single env-configured tenant,
+  // so any caller that forgets to thread the signed-in user's JWT would
+  // silently read *that* tenant's data — a cross-tenant leak. No token → no
+  // Authorization header → the backend answers 401 (fail closed), never with
+  // someone else's data.
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 // ── Map entries ──────────────────────────────────────────────────────────────
@@ -178,7 +182,7 @@ export async function getAnalytics(token?: string | null): Promise<AnalyticsData
 
 export async function getInterventionLogs(token?: string | null): Promise<InterventionLog[]> {
   const res = await fetch(`${backendUrl}/api/v1/map/logs`, {
-    headers: getAuthHeaders(token ?? sdkKey),
+    headers: getAuthHeaders(token),
     cache: 'no-store',
   });
   if (!res.ok) throw new Error(`Failed to fetch intervention logs: ${res.status}`);

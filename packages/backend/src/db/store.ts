@@ -188,6 +188,8 @@ export interface Store {
   getTenantByName(name: string): Promise<Tenant | undefined>;
   createTenant(tenant: Tenant): Promise<void>;
   updateTenant(id: string, patch: Partial<Omit<Tenant, 'id'>>): Promise<Tenant | undefined>;
+  /** Tenants that hold a license refresh token — candidates for auto-renewal. */
+  listTenantsWithLicenseRefresh(): Promise<Tenant[]>;
 
   // ── Functional map ───────────────────────────────────────────────────
   getMapEntriesByTenantId(tenantId: string): Promise<FunctionalMapEntry[]>;

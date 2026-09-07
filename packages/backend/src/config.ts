@@ -71,4 +71,9 @@ export const config = {
   // ── License server ────────────────────────────────────────────────────────
   licenseServerUrl: process.env.LICENSE_SERVER_URL ?? 'https://license.useq.dev',
   licenseServerApiKey: process.env.LICENSE_SERVER_API_KEY ?? 'opentam-default-key',
+  // When true, each new tenant created via /auth/register is registered with
+  // the license server and issued its own license key (SaaS mode). Off by
+  // default so self-hosted/community deployments — and the test suite — never
+  // make an outbound call on signup.
+  registerTenantsWithLicenseServer: process.env.REGISTER_TENANTS_WITH_LICENSE_SERVER === 'true',
 } as const;

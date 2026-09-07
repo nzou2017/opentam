@@ -308,6 +308,10 @@ class InMemoryStore implements Store {
     return updated;
   }
 
+  async listTenantsWithLicenseRefresh(): Promise<Tenant[]> {
+    return [...this.tenants.values()].filter((t) => !!t.licenseRefreshToken);
+  }
+
   // ── Functional map ───────────────────────────────────────────────────
 
   async getMapEntriesByTenantId(tenantId: string): Promise<FunctionalMapEntry[]> {

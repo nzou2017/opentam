@@ -13,6 +13,8 @@ export const tenants = sqliteTable('tenants', {
   // Per-tenant enterprise license (activated manually via Settings > General > License)
   licenseKey: text('license_key'),
   licenseExpiresAt: text('license_expires_at'),
+  // Renewal token for SaaS-provisioned tenant licenses (see tenantLicenseRefresh)
+  licenseRefreshToken: text('license_refresh_token'),
   // Per-tenant LLM config
   llmProvider: text('llm_provider'),
   llmApiKey: text('llm_api_key'),

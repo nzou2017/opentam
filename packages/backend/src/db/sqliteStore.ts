@@ -353,6 +353,7 @@ export class SqliteStore implements Store {
     // Per-tenant enterprise license columns
     addColumnIfMissing('tenants', 'license_key', 'TEXT');
     addColumnIfMissing('tenants', 'license_expires_at', 'TEXT');
+    addColumnIfMissing('tenants', 'license_refresh_token', 'TEXT');
 
     // Resumable-job checkpoint columns (added after crawl_jobs/github_crawl_jobs
     // already existed on some deployments)
@@ -451,6 +452,9 @@ export class SqliteStore implements Store {
       secretKey: tenant.secretKey,
       plan: tenant.plan,
       model: tenant.model ?? null,
+      licenseKey: tenant.licenseKey ?? null,
+      licenseExpiresAt: tenant.licenseExpiresAt ?? null,
+      licenseRefreshToken: tenant.licenseRefreshToken ?? null,
     }).run();
   }
 
@@ -463,9 +467,16 @@ export class SqliteStore implements Store {
     if (patch.model !== undefined) values.model = patch.model;
     if (patch.licenseKey !== undefined) values.licenseKey = patch.licenseKey;
     if (patch.licenseExpiresAt !== undefined) values.licenseExpiresAt = patch.licenseExpiresAt;
+    if (patch.licenseRefreshToken !== undefined) values.licenseRefreshToken = patch.licenseRefreshToken;
 
     this.db.update(schema.tenants).set(values).where(eq(schema.tenants.id, id)).run();
     return this.getTenantById(id);
+  }
+
+  async listTenantsWithLicenseRefresh(): Promise<Tenant[]> {
+    const rows = this.db.select().from(schema.tenants)
+      .where(sql`${schema.tenants.licenseRefreshToken} IS NOT NULL`).all();
+    return rows.map((r) => this.toTenant(r));
   }
 
   private toTenant(row: typeof schema.tenants.$inferSelect): Tenant {
@@ -478,6 +489,7 @@ export class SqliteStore implements Store {
       model: row.model ?? undefined,
       licenseKey: row.licenseKey ?? undefined,
       licenseExpiresAt: row.licenseExpiresAt ?? undefined,
+      licenseRefreshToken: row.licenseRefreshToken ?? undefined,
     };
   }
 

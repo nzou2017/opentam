@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { getAnalytics } from '@/lib/api';
+import { getServerToken } from '@/lib/serverAuth';
 
 export const dynamic = 'force-dynamic';
 
 export default async function AnalyticsPage() {
-  const analytics = await getAnalytics().catch(() => null);
+  const analytics = await getAnalytics(await getServerToken()).catch(() => null);
 
   const actionLabels: Record<string, string> = {
     overlay_highlight: 'Overlay Highlight',

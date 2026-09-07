@@ -38,6 +38,7 @@ import { seedQAdminDocs } from './seed/seedQAdminDocs.js';
 import { initLicense } from './license.js';
 import { setupRoutes } from './routes/setup.js';
 import { startLicenseRefreshScheduler } from './services/licenseRefresh.js';
+import { startTenantLicenseRefreshScheduler } from './services/tenantLicenseRefresh.js';
 import { startCrawlJobWorker } from './jobs/worker.js';
 
 async function bootstrap(): Promise<void> {
@@ -75,6 +76,9 @@ async function bootstrap(): Promise<void> {
 
   // Start background license refresh scheduler
   startLicenseRefreshScheduler();
+
+  // Auto-renew per-tenant licenses before they expire (SaaS mode only)
+  startTenantLicenseRefreshScheduler();
 
   // Start the crawl job worker (picks up queued spider/GitHub crawl jobs)
   startCrawlJobWorker();

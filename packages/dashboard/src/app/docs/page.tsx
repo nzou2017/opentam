@@ -1,15 +1,16 @@
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { cookies } from 'next/headers';
 import { backendConfig } from '@/lib/config';
+import { getServerToken } from '@/lib/serverAuth';
 import DocsManager from './DocsManager';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DocsPage() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get('q_token')?.value ?? backendConfig.secretKey;
+  // Use the signed-in user's JWT only — never the shared secret key, which
+  // resolves to the env-configured tenant (cross-tenant leak). See serverAuth.
+  const token = await getServerToken();
 
   return (
     <div className="flex flex-col gap-6 p-8">

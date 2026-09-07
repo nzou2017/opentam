@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { getAnalytics, getInterventionLogs } from '@/lib/api';
+import { getServerToken } from '@/lib/serverAuth';
 import type { InterventionLog } from '@opentam/shared';
 import { InterventionLogsTable } from '@/components/InterventionLogsTable';
 
@@ -31,9 +32,10 @@ async function getUsageSummary(): Promise<{ events: { used: number; limit: numbe
 }
 
 export default async function OverviewPage() {
+  const token = await getServerToken();
   const [analytics, logs, usage] = await Promise.all([
-    getAnalytics().catch(() => null),
-    getInterventionLogs().catch(() => [] as InterventionLog[]),
+    getAnalytics(token).catch(() => null),
+    getInterventionLogs(token).catch(() => [] as InterventionLog[]),
     getUsageSummary(),
   ]);
 
