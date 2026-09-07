@@ -378,6 +378,7 @@ export class SqliteStore implements Store {
     addColumnIfMissing('tenants', 'chroma_url', 'TEXT');
     addColumnIfMissing('tenants', 'chroma_collection', 'TEXT');
     addColumnIfMissing('tenants', 'embedding_dimensions', 'INTEGER');
+    addColumnIfMissing('tenants', 'knowledge_base_language', 'TEXT');
 
     // ── Mobile platform support migration ─────────────────────────────────
     // Add platform columns to existing tables (safe for existing DBs)
@@ -1200,6 +1201,7 @@ export class SqliteStore implements Store {
       chromaUrl: schema.tenants.chromaUrl,
       chromaCollection: schema.tenants.chromaCollection,
       embeddingDimensions: schema.tenants.embeddingDimensions,
+      knowledgeBaseLanguage: schema.tenants.knowledgeBaseLanguage,
     }).from(schema.tenants).where(eq(schema.tenants.id, tenantId)).get();
     if (!row) return undefined;
     return {
@@ -1218,6 +1220,7 @@ export class SqliteStore implements Store {
       chromaUrl: row.chromaUrl ?? undefined,
       chromaCollection: row.chromaCollection ?? undefined,
       embeddingDimensions: row.embeddingDimensions ?? undefined,
+      knowledgeBaseLanguage: row.knowledgeBaseLanguage ?? undefined,
     };
   }
 
@@ -1363,6 +1366,7 @@ export class SqliteStore implements Store {
     if (settings.chromaUrl !== undefined) values.chromaUrl = settings.chromaUrl || null;
     if (settings.chromaCollection !== undefined) values.chromaCollection = settings.chromaCollection || null;
     if (settings.embeddingDimensions !== undefined) values.embeddingDimensions = settings.embeddingDimensions || null;
+    if (settings.knowledgeBaseLanguage !== undefined) values.knowledgeBaseLanguage = settings.knowledgeBaseLanguage || null;
 
     this.db.update(schema.tenants).set(values).where(eq(schema.tenants.id, tenantId)).run();
   }

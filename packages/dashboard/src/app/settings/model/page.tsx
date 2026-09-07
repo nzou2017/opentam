@@ -26,6 +26,7 @@ export default function ModelSettingsPage() {
     chromaUrl: '',
     chromaCollection: '',
     embeddingDimensions: '',
+    knowledgeBaseLanguage: '',
   });
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -55,6 +56,7 @@ export default function ModelSettingsPage() {
             chromaUrl: data.chromaUrl ?? '',
             chromaCollection: data.chromaCollection ?? '',
             embeddingDimensions: data.embeddingDimensions?.toString() ?? '',
+            knowledgeBaseLanguage: data.knowledgeBaseLanguage ?? '',
           });
         })
         .catch(() => {});
@@ -81,6 +83,8 @@ export default function ModelSettingsPage() {
     if (form.chromaUrl) body.chromaUrl = form.chromaUrl;
     if (form.chromaCollection) body.chromaCollection = form.chromaCollection;
     if (form.embeddingDimensions) body.embeddingDimensions = parseInt(form.embeddingDimensions, 10);
+    // Always send (including empty) so clearing it resets to the English default.
+    body.knowledgeBaseLanguage = form.knowledgeBaseLanguage.trim();
 
     try {
       const res = await fetch(`${backendConfig.backendUrl}/api/v1/tenant/settings`, {
@@ -219,6 +223,22 @@ export default function ModelSettingsPage() {
             <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Collection Name</label>
             <input type="text" value={form.chromaCollection} onChange={e => setForm(f => ({ ...f, chromaCollection: e.target.value }))}
               placeholder="Auto (q_tenant_{id})" aria-label="Chroma collection" className={inputCls} />
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-6 shadow-sm">
+        <h2 className="mb-4 text-base font-medium text-gray-800 dark:text-gray-200">Knowledge Base</h2>
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Language</label>
+            <input type="text" value={form.knowledgeBaseLanguage} onChange={e => setForm(f => ({ ...f, knowledgeBaseLanguage: e.target.value }))}
+              placeholder="English" aria-label="Knowledge base language" className={inputCls} />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              The language your ingested docs and workflows are written in (e.g. English, Spanish, es).
+              The assistant replies to users in their own language but searches your content in this one,
+              so speakers of any language get answers. Leave blank for English.
+            </p>
           </div>
         </div>
       </div>

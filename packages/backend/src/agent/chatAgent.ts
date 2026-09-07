@@ -8,6 +8,7 @@ import { getStore } from '../db/index.js';
 import { getToolDefinitions, executeLookup, executeSearchDocs, executeSearchWorkflows, executeSubmitFeedback, parseIntervention, stripStrayMarkup } from './tools.js';
 import type { FeedbackContext } from './tools.js';
 import { runChatAgentOpenAI } from './chatAgentOpenAI.js';
+import { resolveKbLanguageName, buildMultilingualDirective } from './language.js';
 
 const INTERVENTION_TOOL_NAMES = new Set(['highlight_element', 'deep_link', 'show_message', 'create_tour']);
 
@@ -144,6 +145,9 @@ export async function runChatAgent(
   const tenantSettings = await store.getTenantSettings(tenantId);
   const provider = tenantSettings?.llmProvider ?? config.llmProvider;
   const resolvedModel = tenantSettings?.llmModel ?? model;
+  // Language the knowledge base is written in — the agent translates its search
+  // queries into this so non-native speakers still match the indexed content.
+  const kbLanguage = resolveKbLanguageName(tenantSettings?.knowledgeBaseLanguage);
 
   // Gemini
   if (provider === 'gemini') {
@@ -151,7 +155,7 @@ export async function runChatAgent(
     return runChatAgentOpenAI(message, tenantId, currentUrl, entries, geminiModel, {
       baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
       apiKey: tenantSettings?.llmApiKey ?? config.geminiApiKey,
-    }, history, platform, domSnapshot, feedbackContext);
+    }, history, platform, domSnapshot, feedbackContext, kbLanguage);
   }
 
   // OpenAI-compatible (also handles 'minimax' which uses the same OpenAI-compatible path)
@@ -160,7 +164,7 @@ export async function runChatAgent(
     return runChatAgentOpenAI(message, tenantId, currentUrl, entries, openaiModel, {
       baseURL: tenantSettings?.llmBaseUrl ?? config.llmBaseUrl,
       apiKey: tenantSettings?.llmApiKey ?? config.llmApiKey,
-    }, history, platform, domSnapshot, feedbackContext);
+    }, history, platform, domSnapshot, feedbackContext, kbLanguage);
   }
 
   // Anthropic (default)
@@ -212,7 +216,7 @@ User question: ${message}`;
     const response = await client.messages.create({
       model: resolvedModel,
       max_tokens: 512,
-      system: getChatSystemPrompt(platform),
+      system: getChatSystemPrompt(platform) + buildMultilingualDirective(kbLanguage),
       tools: toolDefs,
       messages,
     });

@@ -30,6 +30,7 @@ const SettingsBody = z.object({
   chromaUrl: z.string().optional(),
   chromaCollection: z.string().optional(),
   embeddingDimensions: z.number().int().positive().optional(),
+  knowledgeBaseLanguage: z.string().max(40).optional(),
 });
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {

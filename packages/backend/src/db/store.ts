@@ -359,6 +359,8 @@ export interface TenantSettings {
   chromaUrl?: string;
   chromaCollection?: string;
   embeddingDimensions?: number;
+  /** Language the docs/workflows are written in (code or name). Null = English. */
+  knowledgeBaseLanguage?: string;
   ssoGoogleClientId?: string;
   ssoGoogleEnabled?: boolean;
 }

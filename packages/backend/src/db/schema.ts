@@ -33,6 +33,10 @@ export const tenants = sqliteTable('tenants', {
   chromaUrl: text('chroma_url'),
   chromaCollection: text('chroma_collection'),
   embeddingDimensions: integer('embedding_dimensions'),
+  // Language the knowledge base (docs/workflows) is written in. The chat agent
+  // translates search queries into this language so non-native speakers still
+  // match the indexed content. Null = English.
+  knowledgeBaseLanguage: text('knowledge_base_language'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
 });

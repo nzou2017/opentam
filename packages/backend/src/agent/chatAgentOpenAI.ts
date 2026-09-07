@@ -6,6 +6,7 @@ import type { FunctionalMapEntry, InterventionCommand, Platform } from '@opentam
 import { config } from '../config.js';
 import { getOpenAIToolDefinitions, executeLookup, executeSearchDocs, executeSearchWorkflows, executeSubmitFeedback, parseIntervention, stripStrayMarkup } from './tools.js';
 import type { FeedbackContext } from './tools.js';
+import { buildMultilingualDirective, DEFAULT_KB_LANGUAGE } from './language.js';
 
 const INTERVENTION_TOOL_NAMES = new Set(['highlight_element', 'deep_link', 'show_message', 'create_tour']);
 
@@ -130,6 +131,7 @@ export async function runChatAgentOpenAI(
   platform: Platform = 'web',
   domSnapshot?: string,
   feedbackContext?: FeedbackContext,
+  kbLanguageName: string = DEFAULT_KB_LANGUAGE,
 ): Promise<{ reply: string; intervention?: InterventionCommand }> {
   const client = new OpenAI({
     apiKey: clientOverride?.apiKey ?? config.llmApiKey,
@@ -167,7 +169,7 @@ User question: ${message}`;
 
   // Build messages with conversation history for multi-turn context
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: 'system', content: getChatSystemPrompt(platform) },
+    { role: 'system', content: getChatSystemPrompt(platform) + buildMultilingualDirective(kbLanguageName) },
   ];
   if (history && history.length > 0) {
     const recentHistory = history.slice(-10);
