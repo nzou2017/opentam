@@ -8,7 +8,9 @@ import { getStore } from '../db/index.js';
 import { config } from '../config.js';
 import { resolveRagConfig, isRagConfiguredForTenant } from '../ingestion/ragConfig.js';
 import { executeSubmitFeedback, stripStrayMarkup, MAX_ATTACHMENTS_PER_REQUEST } from '../agent/tools.js';
-import { __resetAttachmentRateLimits, MAX_PENDING_PER_SESSION, MAX_UPLOADS_PER_MIN_PER_IP } from '../routes/attachments.js';
+import { __resetAttachmentRateLimits, MAX_PENDING_PER_SESSION, MAX_UPLOADS_PER_MIN_PER_IP, ATTACHMENTS_DIR } from '../routes/attachments.js';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 let app: FastifyInstance;
 
@@ -2071,6 +2073,90 @@ describe('Attachment store methods', () => {
 
     const unlinked = await store.getUnlinkedAttachmentsBySession(TENANT_ID, 'session-that-never-uploaded-anything');
     expect(unlinked).toHaveLength(0);
+  });
+
+  it('deleteFeatureRequest succeeds and cleans up attachment rows when one is linked', async () => {
+    // Regression test: deleting a feature request with a linked attachment
+    // used to fail with "FOREIGN KEY constraint failed" (attachments.
+    // feature_request_id references feature_requests.id, and nothing
+    // removed the child row before deleting the parent).
+    const store = getStore();
+    const featureRequestId = `fr-delete-test-${Date.now()}`;
+    await store.createFeatureRequest({
+      id: featureRequestId,
+      tenantId: TENANT_ID,
+      type: 'bug_report',
+      title: 'Delete-with-attachment regression test',
+      description: 'What happened: testing delete cascade.',
+      status: 'new',
+      votes: 0,
+      submittedBy: 'test',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const attachmentId = `att-delete-test-${Date.now()}`;
+    await store.createAttachment({
+      id: attachmentId,
+      tenantId: TENANT_ID,
+      sessionId: 'delete-test-session',
+      featureRequestId,
+      mimeType: 'image/png',
+      filename: 'delete-test.png',
+      url: 'http://localhost:3001/api/v1/attachments/delete-test',
+      createdAt: new Date().toISOString(),
+    });
+
+    const deleted = await store.deleteFeatureRequest(featureRequestId, TENANT_ID);
+    expect(deleted).toBe(true);
+
+    expect(await store.getFeatureRequestById(featureRequestId, TENANT_ID)).toBeUndefined();
+    expect(await store.getAttachmentById(attachmentId)).toBeUndefined();
+  });
+
+  it('DELETE /api/v1/feature-requests/:id — succeeds and removes the attachment file when one is linked', async () => {
+    const { token, tenantId } = await registerAndGetToken(app);
+    const store = getStore();
+
+    const featureRequestId = `fr-route-delete-test-${Date.now()}`;
+    await store.createFeatureRequest({
+      id: featureRequestId,
+      tenantId,
+      type: 'bug_report',
+      title: 'Route delete-with-attachment regression test',
+      description: 'What happened: testing the real HTTP DELETE handler.',
+      status: 'new',
+      votes: 0,
+      submittedBy: 'test',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    await mkdir(ATTACHMENTS_DIR, { recursive: true });
+    const filename = `route-delete-test-${Date.now()}.png`;
+    const filePath = join(ATTACHMENTS_DIR, filename);
+    await writeFile(filePath, Buffer.from('fake-png-bytes'));
+
+    await store.createAttachment({
+      id: `att-route-delete-test-${Date.now()}`,
+      tenantId,
+      sessionId: 'route-delete-test-session',
+      featureRequestId,
+      mimeType: 'image/png',
+      filename,
+      url: `http://localhost:3001/api/v1/attachments/route-delete-test`,
+      createdAt: new Date().toISOString(),
+    });
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/feature-requests/${featureRequestId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(204);
+
+    expect(await store.getFeatureRequestById(featureRequestId, tenantId)).toBeUndefined();
+    await expect(readFile(filePath)).rejects.toThrow();
   });
 });
 

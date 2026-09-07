@@ -314,6 +314,8 @@ export interface Store {
   countAttachmentsForFeatureRequest(featureRequestId: string): Promise<number>;
   /** How many uploaded-but-not-yet-claimed attachments a session is holding — used to cap runaway/bot uploads. */
   countPendingAttachmentsBySession(tenantId: string, sessionId: string): Promise<number>;
+  /** All attachments linked to a feature request — used to clean up their files before the request itself is deleted. */
+  getAttachmentsByFeatureRequestId(featureRequestId: string): Promise<Attachment[]>;
 
   // ── Surveys ─────────────────────────────────────────────────────────
   createSurvey(survey: SurveyDefinition): Promise<void>;

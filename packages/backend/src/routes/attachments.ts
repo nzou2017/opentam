@@ -11,7 +11,9 @@ import { MAX_ATTACHMENTS_PER_REQUEST } from '../agent/tools.js';
 
 // Docker-mounted volume in production (see docker-compose.yml's
 // q_attachments volume) — falls back to a local dir for non-Docker dev.
-const ATTACHMENTS_DIR = process.env.ATTACHMENTS_DIR ?? join(process.cwd(), 'attachments');
+// Exported so routes/featureRequests.ts can remove files for attachments
+// linked to a feature request that's being deleted.
+export const ATTACHMENTS_DIR = process.env.ATTACHMENTS_DIR ?? join(process.cwd(), 'attachments');
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5MB decoded
 
 // ── Abuse protection ────────────────────────────────────────────────────────

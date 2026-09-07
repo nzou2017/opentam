@@ -3,11 +3,14 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { FeatureRequest, FeedbackType, FeatureRequestStatus } from '@opentam/shared';
 import { getStore } from '../db/index.js';
 import type { AuthenticatedRequest } from '../middleware/auth.js';
 import { logAudit } from '../middleware/audit.js';
 import { requirePlan } from '../middleware/planGate.js';
+import { ATTACHMENTS_DIR } from './attachments.js';
 
 const CreateFeatureRequestBody = z.object({
   type: z.enum(['feature_request', 'positive_feedback', 'bug_report']),
@@ -126,6 +129,20 @@ export async function featureRequestRoutes(app: FastifyInstance): Promise<void> 
 
     const { id } = request.params as { id: string };
     const store = getStore();
+
+    // Remove any linked screenshot files from disk before deleting the DB
+    // rows — deleteFeatureRequest below cleans up the attachment rows
+    // themselves (they'd otherwise fail the parent delete with a FOREIGN
+    // KEY constraint error), but has no filesystem access of its own.
+    const attachments = await store.getAttachmentsByFeatureRequestId(id);
+    for (const attachment of attachments) {
+      try {
+        await unlink(join(ATTACHMENTS_DIR, attachment.filename));
+      } catch {
+        // File already gone or never existed — fine, we're deleting anyway.
+      }
+    }
+
     const deleted = await store.deleteFeatureRequest(id, request.tenant.id);
     if (!deleted) return reply.code(404).send({ error: 'Feature request not found' });
 

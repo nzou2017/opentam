@@ -1412,6 +1412,15 @@ export class SqliteStore implements Store {
     // Delete votes first
     this.db.delete(schema.featureRequestVotes)
       .where(eq(schema.featureRequestVotes.featureRequestId, id)).run();
+    // Delete linked attachment rows too — attachments.feature_request_id
+    // references this row, so leaving them would fail the parent delete
+    // with a FOREIGN KEY constraint error. Callers that also want the
+    // underlying files removed from disk should fetch
+    // getAttachmentsByFeatureRequestId(id) BEFORE calling this method (see
+    // routes/featureRequests.ts's DELETE handler) — this only cleans up
+    // the DB rows.
+    this.db.delete(schema.attachments)
+      .where(eq(schema.attachments.featureRequestId, id)).run();
     const result = this.db.delete(schema.featureRequests)
       .where(and(eq(schema.featureRequests.id, id), eq(schema.featureRequests.tenantId, tenantId))).run();
     return result.changes > 0;
@@ -1510,6 +1519,12 @@ export class SqliteStore implements Store {
         eq(schema.attachments.sessionId, sessionId),
         isNull(schema.attachments.featureRequestId),
       )).all().length;
+  }
+
+  async getAttachmentsByFeatureRequestId(featureRequestId: string): Promise<Attachment[]> {
+    const rows = this.db.select().from(schema.attachments)
+      .where(eq(schema.attachments.featureRequestId, featureRequestId)).all();
+    return rows.map((r) => this.toAttachment(r));
   }
 
   private toAttachment(row: typeof schema.attachments.$inferSelect): Attachment {

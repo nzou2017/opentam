@@ -758,6 +758,10 @@ class InMemoryStore implements Store {
     for (const [key, v] of this.featureRequestVotesMap) {
       if (v.featureRequestId === id) this.featureRequestVotesMap.delete(key);
     }
+    // Delete linked attachment rows too (see sqliteStore.ts's equivalent for why).
+    for (const [key, a] of this.attachmentsMap) {
+      if (a.featureRequestId === id) this.attachmentsMap.delete(key);
+    }
     return this.featureRequestsMap.delete(id);
   }
 
@@ -817,6 +821,10 @@ class InMemoryStore implements Store {
     return [...this.attachmentsMap.values()].filter(
       (a) => a.tenantId === tenantId && a.sessionId === sessionId && !a.featureRequestId,
     ).length;
+  }
+
+  async getAttachmentsByFeatureRequestId(featureRequestId: string): Promise<Attachment[]> {
+    return [...this.attachmentsMap.values()].filter((a) => a.featureRequestId === featureRequestId);
   }
 
   // ── Audit logs ──────────────────────────────────────────────────────
