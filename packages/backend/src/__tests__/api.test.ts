@@ -1929,6 +1929,34 @@ describe('stripStrayMarkup', () => {
   it('collapses whitespace left behind after stripping tags', () => {
     expect(stripStrayMarkup('Go here: <a href="x">click</a>  now.')).toBe('Go here: click now.');
   });
+
+  it('unwraps a markdown link whose target is a selector to just its label', () => {
+    // Observed live with MiniMax: the model narrates the nav as a markdown link
+    // with the CSS selector as the "URL" instead of calling highlight_element.
+    const input = '点击左侧导航栏中的 [Channels — connect messaging platforms](a[href="/channels"])。';
+    const result = stripStrayMarkup(input);
+    expect(result).toContain('Channels — connect messaging platforms');
+    expect(result).not.toContain('a[href');
+    expect(result).not.toContain('](');
+  });
+
+  it('strips a backtick-wrapped selector fragment leaked into prose', () => {
+    const input = 'El selector para esto es: `a[href="/config"]`. Si necesitas más ayuda, házmelo saber.';
+    const result = stripStrayMarkup(input);
+    expect(result).not.toContain('a[href');
+    expect(result).not.toContain('`');
+    expect(result).toContain('Si necesitas más ayuda');
+  });
+
+  it('strips a bare attribute selector and tidies orphaned punctuation', () => {
+    expect(stripStrayMarkup('Open the menu [aria-label="Settings"] to continue.'))
+      .toBe('Open the menu to continue.');
+  });
+
+  it('leaves a real comparison in brackets-free prose untouched', () => {
+    const clean = 'Set a limit between 10 and 100 items.';
+    expect(stripStrayMarkup(clean)).toBe(clean);
+  });
 });
 
 // ─────────────────────────────────────────────────

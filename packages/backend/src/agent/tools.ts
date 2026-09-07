@@ -21,20 +21,48 @@ export interface FeedbackContext {
 }
 
 /**
- * Safety net for a model that, instead of making a real tool call, writes
- * a fake one inline as HTML-ish markup (e.g. `<a href="..." message="..."
- * confidence="0.9"></a>`) — observed with smaller/less-instruction-tuned
- * models when the functional map has nothing for them to ground a real
- * tool call in. The system prompt now tells the model not to do this, but
- * that's not a guarantee, so strip any tag-shaped text (`<word ...>` /
- * `</word>`) before a reply ever reaches the client. Legitimate replies
- * are plain prose per the prompt's own "be concise, no markdown" rule, so
- * this never touches well-formed output — it only strips things that
- * start with `<` followed by a letter, so a stray "<" used as a math
- * comparison (e.g. "less than 100") is untouched.
+ * Selector-shaped fragment that leaks into a reply when the model narrates
+ * navigation instead of making a real tool call: a CSS/accessibility selector
+ * with an attribute part, optionally with an id/class suffix — e.g.
+ * `a[href="/channels"]`, `[aria-label="Save"]`, `button[type="submit"]#go`.
+ */
+const SELECTOR_FRAGMENT_RE = /[a-zA-Z0-9_-]*\[[^\]\n]{1,160}\][a-zA-Z0-9_#.-]*/g;
+
+/**
+ * Safety net for a model that, instead of making a real tool call, describes
+ * the navigation inline. Observed live (esp. with smaller / less
+ * instruction-tuned models like MiniMax) in three shapes, all stripped here so
+ * a raw selector or fake tool call never reaches the client:
+ *   1. HTML-ish fake tool calls — `<a href="..." message="..." confidence="0.9"></a>`.
+ *   2. Markdown links whose target is a selector or route — `[Channels](a[href="/channels"])`
+ *      → unwrapped to just the visible label.
+ *   3. Bare or backtick-wrapped selector fragments in prose — `` `a[href="/config"]` ``.
+ *
+ * The system prompt tells the model not to do any of this, but that's not a
+ * guarantee. Legitimate replies are plain prose per the prompt's "be concise,
+ * no markdown" rule, so this leaves well-formed output untouched: the tag rule
+ * only matches `<` followed by a letter (so "less than <100" survives), and the
+ * selector rule requires a bracketed `[...]` attribute part.
  */
 export function stripStrayMarkup(text: string): string {
-  return text.replace(/<\/?[a-zA-Z][^<>]*>/g, '').replace(/\s{2,}/g, ' ').trim();
+  let out = text
+    // 1. Fake HTML tool calls.
+    .replace(/<\/?[a-zA-Z][^<>]*>/g, '')
+    // 2. Markdown links → visible label (drop the selector/route target).
+    .replace(/\[([^\]\n]+)\]\([^)\n]*\)/g, '$1')
+    // 3. Bare / backticked selector fragments left in prose.
+    .replace(SELECTOR_FRAGMENT_RE, '');
+
+  // Tidy up markup and punctuation orphaned by the removals above.
+  out = out
+    .replace(/`\s*`/g, '')                  // empty backtick pairs
+    .replace(/\(\s*\)/g, '')                // empty parens
+    .replace(/[:：]\s*(?=[.。!?！？])/g, '')  // "the selector is: ." → "the selector is."
+    .replace(/\s+([.,;:。，、！？])/g, '$1')   // space before punctuation
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  return out;
 }
 
 export type ToolName = 'lookup_functional_map' | 'search_docs' | 'search_workflows' | 'highlight_element' | 'deep_link' | 'show_message' | 'create_tour' | 'submit_feedback';
