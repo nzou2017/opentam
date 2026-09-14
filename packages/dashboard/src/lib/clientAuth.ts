@@ -17,5 +17,11 @@ export async function getClientToken(): Promise<string> {
   return '';
 }
 
-/** Call on logout to clear the cached token. */
+/** Call right after login so subsequent getClientToken() calls return the new
+ * tenant's token immediately, without waiting on a stale cache to expire. */
+export function setClientToken(token: string) { _token = token; }
+
+/** Call on logout to clear the cached token — otherwise a same-tab login as a
+ * different tenant keeps serving the previous tenant's cached JWT until a
+ * full page reload, leaking that tenant's data into the new session. */
 export function clearClientToken() { _token = null; }
