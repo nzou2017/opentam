@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, Platform } from '@opentam/shared';
+import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, Platform, DiscoveryCase, ConversationMessage, ExtractedFact, AgentTurn } from '@opentam/shared';
 
 export interface ServerLicense {
   deploymentId: string;         // stable UUID for this OpenTAM instance
@@ -190,6 +190,8 @@ export interface Store {
   updateTenant(id: string, patch: Partial<Omit<Tenant, 'id'>>): Promise<Tenant | undefined>;
   /** Tenants that hold a license refresh token — candidates for auto-renewal. */
   listTenantsWithLicenseRefresh(): Promise<Tenant[]>;
+  /** Tenants with no license key — candidates for backfill provisioning. */
+  listTenantsMissingLicense(): Promise<Tenant[]>;
 
   // ── Functional map ───────────────────────────────────────────────────
   getMapEntriesByTenantId(tenantId: string): Promise<FunctionalMapEntry[]>;
@@ -304,6 +306,20 @@ export interface Store {
   updateFeatureRequest(id: string, tenantId: string, patch: Partial<Omit<FeatureRequest, 'id' | 'tenantId'>>): Promise<FeatureRequest | undefined>;
   deleteFeatureRequest(id: string, tenantId: string): Promise<boolean>;
   voteFeatureRequest(id: string, voterId: string): Promise<{ votes: number; alreadyVoted: boolean }>;
+
+  // ── Discovery cases ─────────────────────────────────────────────────
+  /** Return the one case for (tenantId, sessionId), creating it on first use. */
+  getOrCreateCase(params: { tenantId: string; sessionId: string; platform: Platform }): Promise<DiscoveryCase>;
+  getCaseById(id: string, tenantId: string): Promise<DiscoveryCase | undefined>;
+  updateCase(id: string, tenantId: string, patch: Partial<Omit<DiscoveryCase, 'id' | 'tenantId'>>): Promise<DiscoveryCase | undefined>;
+  /** Append a message; the store assigns the monotonic per-case `seq`. */
+  appendMessage(msg: Omit<ConversationMessage, 'seq'>): Promise<ConversationMessage>;
+  /** Messages for a case in `seq` order; `limit` keeps the most recent N. */
+  getMessages(caseId: string, tenantId: string, limit?: number): Promise<ConversationMessage[]>;
+  addFact(fact: ExtractedFact): Promise<void>;
+  getFacts(caseId: string, tenantId: string): Promise<ExtractedFact[]>;
+  recordAgentTurn(turn: AgentTurn): Promise<void>;
+  getAgentTurns(caseId: string, tenantId: string): Promise<AgentTurn[]>;
 
   // ── Attachments ──────────────────────────────────────────────────────
   createAttachment(attachment: Attachment): Promise<void>;

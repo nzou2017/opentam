@@ -8,6 +8,10 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { getStore } from '../db/index.js';
 import { createJwt, hashToken } from '../middleware/auth.js';
 import { isFeatureLicensed } from '../license.js';
+import {
+  registerTenantWithLicenseServer,
+  LicenseProvisioningError,
+} from '../services/tenantLicenseProvision.js';
 
 const GoogleSsoBody = z.object({
   idToken: z.string().min(1),
@@ -95,13 +99,38 @@ export async function ssoRoutes(app: FastifyInstance): Promise<void> {
 
       // Only create tenant if no tenantId was provided
       if (!requestedTenantId) {
+        const tenantName = `${name}'s Workspace`;
+
+        // Register the new tenant with the license server (SaaS mode only) so it
+        // is recorded there and issued its own license key. If provisioning is
+        // enabled and fails, abort signup — never create an unlicensed tenant.
+        // Mirrors the password-register path in routes/auth.ts.
+        let license;
+        try {
+          license = await registerTenantWithLicenseServer({
+            tenantId,
+            tenantName,
+            ownerName: name,
+            ownerEmail: email,
+            plan: 'hobbyist',
+          });
+        } catch (err) {
+          if (err instanceof LicenseProvisioningError) {
+            return reply.code(502).send({ error: err.message });
+          }
+          throw err;
+        }
+
         const { randomBytes } = await import('node:crypto');
         await store.createTenant({
           id: tenantId,
-          name: `${name}'s Workspace`,
+          name: tenantName,
           sdkKey: `sdk_${randomBytes(24).toString('hex')}`,
           secretKey: `sk_${randomBytes(24).toString('hex')}`,
           plan: 'hobbyist',
+          licenseKey: license?.licenseKey,
+          licenseExpiresAt: license?.licenseExpiresAt,
+          licenseRefreshToken: license?.licenseRefreshToken,
         });
       }
 

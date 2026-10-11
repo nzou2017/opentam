@@ -3,6 +3,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { getStore } from '../db/index.js';
 import { runChatAgent } from '../agent/chatAgent.js';
 import { MODEL_BY_PLAN } from '../services/interventionService.js';
@@ -60,7 +61,68 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     const model = tenant.model ?? MODEL_BY_PLAN[tenant.plan] ?? config.model;
 
     try {
-      const result = await runChatAgent(message, tenantId, currentUrl, entries, model, history, platform, domSnapshot, screenName, appVersion, deviceInfo, sessionId);
+      // Discovery state (Phase 1): when enabled, persist conversation server-side
+      // and feed the agent history from the DB rather than the client-supplied
+      // `history`. When disabled, behavior is identical to before.
+      let caseRow: Awaited<ReturnType<typeof store.getOrCreateCase>> | undefined;
+      let userMessageId: string | undefined;
+      let effectiveHistory = history;
+
+      if (config.discoveryState) {
+        caseRow = await store.getOrCreateCase({ tenantId, sessionId, platform });
+        const userMsg = await store.appendMessage({
+          id: randomUUID(),
+          caseId: caseRow.id,
+          tenantId,
+          role: 'user',
+          content: message,
+          createdAt: new Date().toISOString(),
+        });
+        userMessageId = userMsg.id;
+        // Server-persisted history is authoritative — the client cannot spoof
+        // the agent's memory. Keep the most recent 20 messages (10 turns), which
+        // includes the user message we just appended, so drop it from the tail
+        // to avoid duplicating the current turn's input.
+        const prior = await store.getMessages(caseRow.id, tenantId, 20);
+        effectiveHistory = prior
+          .filter((m) => m.id !== userMsg.id)
+          .map((m) => ({ role: m.role, content: m.content }));
+      }
+
+      const startedAt = Date.now();
+      const result = await runChatAgent(message, tenantId, currentUrl, entries, model, effectiveHistory, platform, domSnapshot, screenName, appVersion, deviceInfo, sessionId);
+      const latencyMs = Date.now() - startedAt;
+
+      if (config.discoveryState && caseRow && userMessageId) {
+        const asstMsg = await store.appendMessage({
+          id: randomUUID(),
+          caseId: caseRow.id,
+          tenantId,
+          role: 'assistant',
+          content: result.reply,
+          createdAt: new Date().toISOString(),
+        });
+        await store.recordAgentTurn({
+          id: randomUUID(),
+          caseId: caseRow.id,
+          tenantId,
+          sessionId,
+          userMessageId,
+          assistantMessageId: asstMsg.id,
+          intent: caseRow.type,
+          // Populated in Phase 2 once fact extraction + the playbook land.
+          factsExtracted: [],
+          retrievalQueries: [],
+          missingFieldsBefore: [],
+          missingFieldsAfter: [],
+          nextAction: result.intervention ? 'intervene' : 'answer',
+          toolsCalled: [],
+          model,
+          latencyMs,
+          createdAt: new Date().toISOString(),
+        });
+        await store.updateCase(caseRow.id, tenantId, { updatedAt: new Date().toISOString() });
+      }
 
       // Record usage
       await store.recordUsage(tenantId, 'chat');

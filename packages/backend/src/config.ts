@@ -76,4 +76,12 @@ export const config = {
   // default so self-hosted/community deployments — and the test suite — never
   // make an outbound call on signup.
   registerTenantsWithLicenseServer: process.env.REGISTER_TENANTS_WITH_LICENSE_SERVER === 'true',
+
+  // ── Discovery agent ─────────────────────────────────────────────────────────
+  // When true, /api/v1/chat persists conversation state server-side (cases,
+  // messages, per-turn traces) and loads history from the DB instead of
+  // trusting the client-supplied `history` array. Off by default — pure
+  // substrate for the PM/TAM discovery agent (Phase 1), no reply-behavior
+  // change. See docs/pm_discovery_implementation_plan.md.
+  discoveryState: process.env.DISCOVERY_STATE === 'true',
 } as const;
