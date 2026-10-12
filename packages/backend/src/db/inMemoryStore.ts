@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { randomUUID } from 'node:crypto';
-import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion, Platform, DiscoveryCase, ConversationMessage, ExtractedFact, AgentTurn } from '@opentam/shared';
+import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion, Platform, DiscoveryCase, ConversationMessage, ExtractedFact, AgentTurn, Requirement } from '@opentam/shared';
 import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob, Attachment } from './store.js';
 
 class InMemoryStore implements Store {
@@ -28,6 +28,7 @@ class InMemoryStore implements Store {
   private messagesByCase: Map<string, ConversationMessage[]> = new Map();
   private factsByCase: Map<string, ExtractedFact[]> = new Map();
   private turnsByCase: Map<string, AgentTurn[]> = new Map();
+  private requirementsByCase: Map<string, Requirement[]> = new Map();
   private attachmentsMap: Map<string, Attachment> = new Map();
   private passwordResetTokensMap: Map<string, { userId: string; expiresAt: string }> = new Map();
   private teamInvitesMap: Map<string, TeamInvite> = new Map();
@@ -870,6 +871,18 @@ class InMemoryStore implements Store {
     return (this.turnsByCase.get(caseId) ?? [])
       .filter((t) => t.tenantId === tenantId)
       .map((t) => ({ ...t }));
+  }
+
+  async createRequirement(req: Requirement): Promise<void> {
+    const list = this.requirementsByCase.get(req.caseId) ?? [];
+    list.push({ ...req });
+    this.requirementsByCase.set(req.caseId, list);
+  }
+
+  async getRequirementsByCase(caseId: string, tenantId: string): Promise<Requirement[]> {
+    return (this.requirementsByCase.get(caseId) ?? [])
+      .filter((r) => r.tenantId === tenantId)
+      .map((r) => ({ ...r }));
   }
 
   // ── Attachments ─────────────────────────────────────────────────────
