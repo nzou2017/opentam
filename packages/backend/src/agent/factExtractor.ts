@@ -13,10 +13,18 @@ export interface ExtractedFactInput {
   confidence: number;
 }
 
+// Whether the user's message affirms or rejects a summary the agent presented.
+// Only consulted when the case is awaiting confirmation (design doc §23); the
+// model reports 'none' otherwise.
+export type ConfirmationSignal = 'affirm' | 'deny' | 'none';
+
 export interface ExtractionResult {
   caseType: CaseType;
   facts: ExtractedFactInput[];
+  confirmation: ConfirmationSignal;
 }
+
+const CONFIRMATIONS: ConfirmationSignal[] = ['affirm', 'deny', 'none'];
 
 // Injected into the discovery orchestrator so it can be stubbed in tests
 // (design doc §25 — extraction is step 1 of the turn pipeline).
@@ -60,8 +68,14 @@ function buildExtractionTool(): Anthropic.Tool {
             required: ['field', 'value', 'confidence'],
           },
         },
+        confirmation: {
+          type: 'string',
+          enum: CONFIRMATIONS,
+          description:
+            'If the agent previously asked the user to confirm a summary: affirm (they agreed it is accurate), deny (they said it is wrong or want changes), or none (not a confirmation reply).',
+        },
       },
-      required: ['case_type', 'facts'],
+      required: ['case_type', 'facts', 'confirmation'],
     },
   };
 }
@@ -83,7 +97,7 @@ export const extractFacts: FactExtractor = async ({ message, history, currentTyp
   const tenantSettings = await store.getTenantSettings(tenantId);
   const provider = tenantSettings?.llmProvider ?? config.llmProvider;
   if (provider !== 'anthropic') {
-    return { caseType: currentType, facts: [] };
+    return { caseType: currentType, facts: [], confirmation: 'none' };
   }
 
   const client = new Anthropic({ apiKey: tenantSettings?.llmApiKey ?? config.anthropicApiKey });
@@ -106,7 +120,7 @@ export const extractFacts: FactExtractor = async ({ message, history, currentTyp
 
   for (const block of response.content) {
     if (block.type === 'tool_use' && block.name === 'record_discovery') {
-      const input = block.input as { case_type?: string; facts?: ExtractedFactInput[] };
+      const input = block.input as { case_type?: string; facts?: ExtractedFactInput[]; confirmation?: string };
       const caseType = CASE_TYPES.includes(input.case_type as CaseType)
         ? (input.case_type as CaseType)
         : currentType;
@@ -119,9 +133,12 @@ export const extractFacts: FactExtractor = async ({ message, history, currentTyp
               confidence: typeof f.confidence === 'number' ? Math.max(0, Math.min(1, f.confidence)) : 0.5,
             }))
         : [];
-      return { caseType, facts };
+      const confirmation = CONFIRMATIONS.includes(input.confirmation as ConfirmationSignal)
+        ? (input.confirmation as ConfirmationSignal)
+        : 'none';
+      return { caseType, facts, confirmation };
     }
   }
 
-  return { caseType: currentType, facts: [] };
+  return { caseType: currentType, facts: [], confirmation: 'none' };
 };

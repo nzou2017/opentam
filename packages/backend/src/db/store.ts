@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, Platform, DiscoveryCase, ConversationMessage, ExtractedFact, AgentTurn } from '@opentam/shared';
+import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, Platform, DiscoveryCase, ConversationMessage, ExtractedFact, AgentTurn, Requirement } from '@opentam/shared';
 
 export interface ServerLicense {
   deploymentId: string;         // stable UUID for this OpenTAM instance
@@ -320,6 +320,8 @@ export interface Store {
   getFacts(caseId: string, tenantId: string): Promise<ExtractedFact[]>;
   recordAgentTurn(turn: AgentTurn): Promise<void>;
   getAgentTurns(caseId: string, tenantId: string): Promise<AgentTurn[]>;
+  createRequirement(req: Requirement): Promise<void>;
+  getRequirementsByCase(caseId: string, tenantId: string): Promise<Requirement[]>;
 
   // ── Attachments ──────────────────────────────────────────────────────
   createAttachment(attachment: Attachment): Promise<void>;

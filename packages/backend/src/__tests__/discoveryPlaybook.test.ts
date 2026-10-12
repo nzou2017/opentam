@@ -39,8 +39,8 @@ function chat(sessionId: string, message: string) {
   });
 }
 
-function extraction(result: ExtractionResult) {
-  extractFactsMock.mockResolvedValueOnce(result);
+function extraction(result: Partial<ExtractionResult> & Pick<ExtractionResult, 'caseType' | 'facts'>) {
+  extractFactsMock.mockResolvedValueOnce({ confirmation: 'none', ...result });
 }
 
 describe('Discovery playbook orchestration', () => {
