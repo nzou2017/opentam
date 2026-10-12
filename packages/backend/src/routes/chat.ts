@@ -119,11 +119,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           content: result.reply,
           createdAt: new Date().toISOString(),
         });
-        const nextAction = result.intervention
-          ? 'intervene'
-          : discovery && discovery.missingAfter.length > 0
-            ? 'ask'
-            : 'answer';
+        // Prefer the orchestrator's lifecycle action (ask/confirm/handoff/answer);
+        // an intervention still takes precedence in the trace.
+        const nextAction = result.intervention ? 'intervene' : discovery?.nextAction ?? 'answer';
         await store.recordAgentTurn({
           id: randomUUID(),
           caseId: caseRow.id,

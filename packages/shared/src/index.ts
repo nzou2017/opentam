@@ -344,7 +344,10 @@ export interface SpiderJob {
 // docs/pm_discovery_implementation_plan.md.
 
 export type CaseType = 'feature_request' | 'bug_report' | 'positive_feedback' | 'unknown';
-export type CaseStatus = 'open' | 'ready' | 'filed' | 'abandoned';
+// 'open' → collecting; 'awaiting_confirmation' → summary shown, waiting for the
+// customer to confirm; 'ready' → confirmed; 'filed' → handed off to the team
+// (feature_requests). See docs/pm_discovery_implementation_plan.md Phase 3.
+export type CaseStatus = 'open' | 'awaiting_confirmation' | 'ready' | 'filed' | 'abandoned';
 
 export interface DiscoveryCase {
   id: string;
@@ -415,4 +418,26 @@ export interface AgentTurn {
   latencyMs: number;
   tokenUsage?: AgentTurnTokenUsage;
   createdAt: string;
+}
+
+// A requirement is the synthesized, first-class statement derived from a case's
+// confirmed facts — not left buried in a conversation summary (design doc §21).
+// Created when the customer confirms the agent's understanding (Phase 3).
+export type RequirementType = 'functional' | 'bug_fix';
+export type RequirementStatus = 'draft' | 'confirmed';
+
+export interface Requirement {
+  id: string;
+  caseId: string;
+  tenantId: string;
+  statement: string;
+  type: RequirementType;
+  status: RequirementStatus;
+  customerConfirmed: boolean;
+  /** IDs of the ExtractedFacts this requirement was synthesized from (provenance). */
+  sourceFactIds: string[];
+  /** The feature_requests row this requirement was handed off into, once filed. */
+  featureRequestId?: string;
+  createdAt: string;
+  updatedAt: string;
 }
