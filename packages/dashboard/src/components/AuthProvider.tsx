@@ -5,6 +5,7 @@
 
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { setClientToken, clearClientToken } from '@/lib/clientAuth';
 
 interface UserState {
   id: string;
@@ -48,6 +49,7 @@ export function AuthProvider({ children, initialToken, initialUser }: {
   function login(newToken: string, newUser: UserState) {
     setToken(newToken);
     setUser(newUser);
+    setClientToken(newToken);
     // Store in cookie via API call
     fetch('/api/auth/set-token', {
       method: 'POST',
@@ -59,6 +61,7 @@ export function AuthProvider({ children, initialToken, initialUser }: {
   function logout() {
     setToken(null);
     setUser(null);
+    clearClientToken();
     fetch('/api/auth/clear-token', { method: 'POST' });
   }
 
