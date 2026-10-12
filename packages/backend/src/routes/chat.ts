@@ -6,6 +6,8 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { getStore } from '../db/index.js';
 import { runChatAgent } from '../agent/chatAgent.js';
+import { runDiscoveryStep } from '../agent/discovery.js';
+import { extractFacts } from '../agent/factExtractor.js';
 import { MODEL_BY_PLAN } from '../services/interventionService.js';
 import { config } from '../config.js';
 import { usageLimiter } from '../middleware/planLimits.js';
@@ -67,6 +69,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       let caseRow: Awaited<ReturnType<typeof store.getOrCreateCase>> | undefined;
       let userMessageId: string | undefined;
       let effectiveHistory = history;
+      // Phase 2: discovery analysis (fact extraction → playbook evaluation →
+      // next-question directive). Populated only in discovery mode.
+      let discovery: Awaited<ReturnType<typeof runDiscoveryStep>> | undefined;
 
       if (config.discoveryState) {
         caseRow = await store.getOrCreateCase({ tenantId, sessionId, platform });
@@ -87,10 +92,22 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         effectiveHistory = prior
           .filter((m) => m.id !== userMsg.id)
           .map((m) => ({ role: m.role, content: m.content }));
+
+        // Extract facts, merge into the case, and evaluate the playbook BEFORE
+        // the responder runs, so its directive can steer the next question.
+        discovery = await runDiscoveryStep({
+          store,
+          caseRow,
+          tenantId,
+          message,
+          userMessageId,
+          history: effectiveHistory,
+          extractor: extractFacts,
+        });
       }
 
       const startedAt = Date.now();
-      const result = await runChatAgent(message, tenantId, currentUrl, entries, model, effectiveHistory, platform, domSnapshot, screenName, appVersion, deviceInfo, sessionId);
+      const result = await runChatAgent(message, tenantId, currentUrl, entries, model, effectiveHistory, platform, domSnapshot, screenName, appVersion, deviceInfo, sessionId, discovery?.directive);
       const latencyMs = Date.now() - startedAt;
 
       if (config.discoveryState && caseRow && userMessageId) {
@@ -102,6 +119,11 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           content: result.reply,
           createdAt: new Date().toISOString(),
         });
+        const nextAction = result.intervention
+          ? 'intervene'
+          : discovery && discovery.missingAfter.length > 0
+            ? 'ask'
+            : 'answer';
         await store.recordAgentTurn({
           id: randomUUID(),
           caseId: caseRow.id,
@@ -109,13 +131,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           sessionId,
           userMessageId,
           assistantMessageId: asstMsg.id,
-          intent: caseRow.type,
-          // Populated in Phase 2 once fact extraction + the playbook land.
-          factsExtracted: [],
+          intent: discovery?.intent ?? caseRow.type,
+          factsExtracted: discovery?.factsExtracted ?? [],
           retrievalQueries: [],
-          missingFieldsBefore: [],
-          missingFieldsAfter: [],
-          nextAction: result.intervention ? 'intervene' : 'answer',
+          missingFieldsBefore: discovery?.missingBefore ?? [],
+          missingFieldsAfter: discovery?.missingAfter ?? [],
+          nextAction,
           toolsCalled: [],
           model,
           latencyMs,
