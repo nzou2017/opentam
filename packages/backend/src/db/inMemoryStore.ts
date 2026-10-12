@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
+import { randomUUID } from 'node:crypto';
+import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion, Platform, DiscoveryCase, ConversationMessage, ExtractedFact, AgentTurn } from '@opentam/shared';
 import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob, Attachment } from './store.js';
 
 class InMemoryStore implements Store {
@@ -23,6 +24,10 @@ class InMemoryStore implements Store {
   private workflowStepsMap: Map<string, WorkflowStep[]> = new Map();
   private featureRequestsMap: Map<string, FeatureRequest> = new Map();
   private featureRequestVotesMap: Map<string, { featureRequestId: string; voterId: string }> = new Map();
+  private casesMap: Map<string, DiscoveryCase> = new Map();
+  private messagesByCase: Map<string, ConversationMessage[]> = new Map();
+  private factsByCase: Map<string, ExtractedFact[]> = new Map();
+  private turnsByCase: Map<string, AgentTurn[]> = new Map();
   private attachmentsMap: Map<string, Attachment> = new Map();
   private passwordResetTokensMap: Map<string, { userId: string; expiresAt: string }> = new Map();
   private teamInvitesMap: Map<string, TeamInvite> = new Map();
@@ -310,6 +315,10 @@ class InMemoryStore implements Store {
 
   async listTenantsWithLicenseRefresh(): Promise<Tenant[]> {
     return [...this.tenants.values()].filter((t) => !!t.licenseRefreshToken);
+  }
+
+  async listTenantsMissingLicense(): Promise<Tenant[]> {
+    return [...this.tenants.values()].filter((t) => !t.licenseKey);
   }
 
   // ── Functional map ───────────────────────────────────────────────────
@@ -786,6 +795,81 @@ class InMemoryStore implements Store {
     request.votes += 1;
     this.featureRequestsMap.set(id, request);
     return { votes: request.votes, alreadyVoted: false };
+  }
+
+  // ── Discovery cases ─────────────────────────────────────────────────
+
+  async getOrCreateCase(params: { tenantId: string; sessionId: string; platform: Platform }): Promise<DiscoveryCase> {
+    for (const c of this.casesMap.values()) {
+      if (c.tenantId === params.tenantId && c.sessionId === params.sessionId) return { ...c };
+    }
+    const now = new Date().toISOString();
+    const created: DiscoveryCase = {
+      id: randomUUID(),
+      tenantId: params.tenantId,
+      sessionId: params.sessionId,
+      type: 'unknown',
+      status: 'open',
+      platform: params.platform,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.casesMap.set(created.id, created);
+    return { ...created };
+  }
+
+  async getCaseById(id: string, tenantId: string): Promise<DiscoveryCase | undefined> {
+    const c = this.casesMap.get(id);
+    return c && c.tenantId === tenantId ? { ...c } : undefined;
+  }
+
+  async updateCase(id: string, tenantId: string, patch: Partial<Omit<DiscoveryCase, 'id' | 'tenantId'>>): Promise<DiscoveryCase | undefined> {
+    const c = this.casesMap.get(id);
+    if (!c || c.tenantId !== tenantId) return undefined;
+    const updated = { ...c, ...patch, updatedAt: patch.updatedAt ?? new Date().toISOString() };
+    this.casesMap.set(id, updated);
+    return { ...updated };
+  }
+
+  async appendMessage(msg: Omit<ConversationMessage, 'seq'>): Promise<ConversationMessage> {
+    const list = this.messagesByCase.get(msg.caseId) ?? [];
+    const seq = list.length + 1;
+    const full: ConversationMessage = { ...msg, seq };
+    list.push(full);
+    this.messagesByCase.set(msg.caseId, list);
+    return { ...full };
+  }
+
+  async getMessages(caseId: string, tenantId: string, limit?: number): Promise<ConversationMessage[]> {
+    const list = (this.messagesByCase.get(caseId) ?? [])
+      .filter((m) => m.tenantId === tenantId)
+      .sort((a, b) => a.seq - b.seq);
+    const sliced = typeof limit === 'number' ? list.slice(-limit) : list;
+    return sliced.map((m) => ({ ...m }));
+  }
+
+  async addFact(fact: ExtractedFact): Promise<void> {
+    const list = this.factsByCase.get(fact.caseId) ?? [];
+    list.push({ ...fact });
+    this.factsByCase.set(fact.caseId, list);
+  }
+
+  async getFacts(caseId: string, tenantId: string): Promise<ExtractedFact[]> {
+    return (this.factsByCase.get(caseId) ?? [])
+      .filter((f) => f.tenantId === tenantId)
+      .map((f) => ({ ...f }));
+  }
+
+  async recordAgentTurn(turn: AgentTurn): Promise<void> {
+    const list = this.turnsByCase.get(turn.caseId) ?? [];
+    list.push({ ...turn });
+    this.turnsByCase.set(turn.caseId, list);
+  }
+
+  async getAgentTurns(caseId: string, tenantId: string): Promise<AgentTurn[]> {
+    return (this.turnsByCase.get(caseId) ?? [])
+      .filter((t) => t.tenantId === tenantId)
+      .map((t) => ({ ...t }));
   }
 
   // ── Attachments ─────────────────────────────────────────────────────

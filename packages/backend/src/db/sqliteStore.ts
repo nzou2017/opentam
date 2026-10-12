@@ -4,7 +4,8 @@
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { eq, and, isNull, sql, gte, like, desc, asc } from 'drizzle-orm';
-import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion } from '@opentam/shared';
+import { randomUUID } from 'node:crypto';
+import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion, Platform, DiscoveryCase, ConversationMessage, ExtractedFact, AgentTurn } from '@opentam/shared';
 import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob, Attachment } from './store.js';
 import * as schema from './schema.js';
 import { encrypt, decrypt } from '../crypto.js';
@@ -292,6 +293,66 @@ export class SqliteStore implements Store {
       CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id);
       CREATE INDEX IF NOT EXISTS idx_feature_requests_tenant ON feature_requests(tenant_id);
       CREATE INDEX IF NOT EXISTS idx_feature_request_votes_request ON feature_request_votes(feature_request_id);
+
+      CREATE TABLE IF NOT EXISTS discovery_cases (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        session_id TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'unknown',
+        status TEXT NOT NULL DEFAULT 'open',
+        platform TEXT NOT NULL DEFAULT 'web',
+        feature_request_id TEXT REFERENCES feature_requests(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_discovery_cases_session ON discovery_cases(tenant_id, session_id);
+
+      CREATE TABLE IF NOT EXISTS conversation_messages (
+        id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES discovery_cases(id),
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_conversation_messages_case ON conversation_messages(case_id, seq);
+
+      CREATE TABLE IF NOT EXISTS extracted_facts (
+        id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES discovery_cases(id),
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        field TEXT NOT NULL,
+        value TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_message_id TEXT,
+        confidence REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'customer_stated',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_extracted_facts_case ON extracted_facts(case_id, field);
+
+      CREATE TABLE IF NOT EXISTS agent_turns (
+        id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES discovery_cases(id),
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        session_id TEXT NOT NULL,
+        user_message_id TEXT NOT NULL,
+        assistant_message_id TEXT,
+        intent TEXT NOT NULL DEFAULT 'unknown',
+        facts_extracted TEXT NOT NULL,
+        retrieval_queries TEXT NOT NULL,
+        missing_fields_before TEXT NOT NULL,
+        missing_fields_after TEXT NOT NULL,
+        next_action TEXT NOT NULL,
+        tools_called TEXT NOT NULL,
+        model TEXT NOT NULL,
+        latency_ms INTEGER NOT NULL,
+        token_usage TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_turns_case ON agent_turns(case_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_turns_tenant ON agent_turns(tenant_id, created_at);
     `);
 
     // Migrations for auth hardening columns (safe to run on existing DBs)
@@ -477,6 +538,12 @@ export class SqliteStore implements Store {
   async listTenantsWithLicenseRefresh(): Promise<Tenant[]> {
     const rows = this.db.select().from(schema.tenants)
       .where(sql`${schema.tenants.licenseRefreshToken} IS NOT NULL`).all();
+    return rows.map((r) => this.toTenant(r));
+  }
+
+  async listTenantsMissingLicense(): Promise<Tenant[]> {
+    const rows = this.db.select().from(schema.tenants)
+      .where(sql`${schema.tenants.licenseKey} IS NULL OR ${schema.tenants.licenseKey} = ''`).all();
     return rows.map((r) => this.toTenant(r));
   }
 
@@ -1474,6 +1541,183 @@ export class SqliteStore implements Store {
       .where(eq(schema.featureRequests.id, id)).run();
 
     return { votes: newVotes, alreadyVoted: false };
+  }
+
+  // ── Discovery cases ─────────────────────────────────────────────────────
+
+  private toCase(row: typeof schema.discoveryCases.$inferSelect): DiscoveryCase {
+    return {
+      id: row.id,
+      tenantId: row.tenantId,
+      sessionId: row.sessionId,
+      type: row.type as DiscoveryCase['type'],
+      status: row.status as DiscoveryCase['status'],
+      platform: row.platform as Platform,
+      featureRequestId: row.featureRequestId ?? undefined,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  async getOrCreateCase(params: { tenantId: string; sessionId: string; platform: Platform }): Promise<DiscoveryCase> {
+    const selectExisting = () => this.db.select().from(schema.discoveryCases)
+      .where(and(
+        eq(schema.discoveryCases.tenantId, params.tenantId),
+        eq(schema.discoveryCases.sessionId, params.sessionId),
+      )).get();
+
+    const existing = selectExisting();
+    if (existing) return this.toCase(existing);
+
+    const now = new Date().toISOString();
+    // The UNIQUE(tenant_id, session_id) index makes this race-safe: a concurrent
+    // insert loses here and we fall through to re-selecting the winner's row.
+    this.db.insert(schema.discoveryCases).values({
+      id: randomUUID(),
+      tenantId: params.tenantId,
+      sessionId: params.sessionId,
+      type: 'unknown',
+      status: 'open',
+      platform: params.platform,
+      createdAt: now,
+      updatedAt: now,
+    }).onConflictDoNothing().run();
+
+    const row = selectExisting();
+    if (!row) throw new Error('getOrCreateCase: case missing after insert');
+    return this.toCase(row);
+  }
+
+  async getCaseById(id: string, tenantId: string): Promise<DiscoveryCase | undefined> {
+    const row = this.db.select().from(schema.discoveryCases)
+      .where(and(eq(schema.discoveryCases.id, id), eq(schema.discoveryCases.tenantId, tenantId))).get();
+    return row ? this.toCase(row) : undefined;
+  }
+
+  async updateCase(id: string, tenantId: string, patch: Partial<Omit<DiscoveryCase, 'id' | 'tenantId'>>): Promise<DiscoveryCase | undefined> {
+    const existing = await this.getCaseById(id, tenantId);
+    if (!existing) return undefined;
+    this.db.update(schema.discoveryCases)
+      .set({ ...patch, updatedAt: patch.updatedAt ?? new Date().toISOString() })
+      .where(and(eq(schema.discoveryCases.id, id), eq(schema.discoveryCases.tenantId, tenantId))).run();
+    return this.getCaseById(id, tenantId);
+  }
+
+  async appendMessage(msg: Omit<ConversationMessage, 'seq'>): Promise<ConversationMessage> {
+    // Compute seq + insert atomically so concurrent appends can't collide.
+    return this.db.transaction((tx) => {
+      const maxRow = tx.select({ max: sql<number>`COALESCE(MAX(${schema.conversationMessages.seq}), 0)` })
+        .from(schema.conversationMessages)
+        .where(eq(schema.conversationMessages.caseId, msg.caseId)).get();
+      const seq = (maxRow?.max ?? 0) + 1;
+      tx.insert(schema.conversationMessages).values({
+        id: msg.id,
+        caseId: msg.caseId,
+        tenantId: msg.tenantId,
+        role: msg.role,
+        content: msg.content,
+        seq,
+        createdAt: msg.createdAt,
+      }).run();
+      return { ...msg, seq };
+    });
+  }
+
+  async getMessages(caseId: string, tenantId: string, limit?: number): Promise<ConversationMessage[]> {
+    const rows = this.db.select().from(schema.conversationMessages)
+      .where(and(eq(schema.conversationMessages.caseId, caseId), eq(schema.conversationMessages.tenantId, tenantId)))
+      .orderBy(asc(schema.conversationMessages.seq)).all();
+    // `limit` keeps the most recent N while preserving chronological order.
+    const sliced = typeof limit === 'number' ? rows.slice(-limit) : rows;
+    return sliced.map((r) => ({
+      id: r.id,
+      caseId: r.caseId,
+      tenantId: r.tenantId,
+      role: r.role as ConversationMessage['role'],
+      content: r.content,
+      seq: r.seq,
+      createdAt: r.createdAt,
+    }));
+  }
+
+  async addFact(fact: ExtractedFact): Promise<void> {
+    this.db.insert(schema.extractedFacts).values({
+      id: fact.id,
+      caseId: fact.caseId,
+      tenantId: fact.tenantId,
+      field: fact.field,
+      value: fact.value,
+      sourceType: fact.sourceType,
+      sourceMessageId: fact.sourceMessageId ?? null,
+      confidence: fact.confidence,
+      status: fact.status,
+      createdAt: fact.createdAt,
+    }).run();
+  }
+
+  async getFacts(caseId: string, tenantId: string): Promise<ExtractedFact[]> {
+    const rows = this.db.select().from(schema.extractedFacts)
+      .where(and(eq(schema.extractedFacts.caseId, caseId), eq(schema.extractedFacts.tenantId, tenantId)))
+      .orderBy(asc(schema.extractedFacts.createdAt)).all();
+    return rows.map((r) => ({
+      id: r.id,
+      caseId: r.caseId,
+      tenantId: r.tenantId,
+      field: r.field,
+      value: r.value,
+      sourceType: r.sourceType as ExtractedFact['sourceType'],
+      sourceMessageId: r.sourceMessageId ?? undefined,
+      confidence: r.confidence,
+      status: r.status as ExtractedFact['status'],
+      createdAt: r.createdAt,
+    }));
+  }
+
+  async recordAgentTurn(turn: AgentTurn): Promise<void> {
+    this.db.insert(schema.agentTurns).values({
+      id: turn.id,
+      caseId: turn.caseId,
+      tenantId: turn.tenantId,
+      sessionId: turn.sessionId,
+      userMessageId: turn.userMessageId,
+      assistantMessageId: turn.assistantMessageId ?? null,
+      intent: turn.intent,
+      factsExtracted: turn.factsExtracted,
+      retrievalQueries: turn.retrievalQueries,
+      missingFieldsBefore: turn.missingFieldsBefore,
+      missingFieldsAfter: turn.missingFieldsAfter,
+      nextAction: turn.nextAction,
+      toolsCalled: turn.toolsCalled,
+      model: turn.model,
+      latencyMs: turn.latencyMs,
+      tokenUsage: turn.tokenUsage ?? null,
+      createdAt: turn.createdAt,
+    }).run();
+  }
+
+  async getAgentTurns(caseId: string, tenantId: string): Promise<AgentTurn[]> {
+    const rows = this.db.select().from(schema.agentTurns)
+      .where(and(eq(schema.agentTurns.caseId, caseId), eq(schema.agentTurns.tenantId, tenantId)))
+      .orderBy(asc(schema.agentTurns.createdAt)).all();
+    return rows.map((r) => ({
+      id: r.id,
+      caseId: r.caseId,
+      tenantId: r.tenantId,
+      sessionId: r.sessionId,
+      userMessageId: r.userMessageId,
+      assistantMessageId: r.assistantMessageId ?? undefined,
+      intent: r.intent as AgentTurn['intent'],
+      factsExtracted: r.factsExtracted,
+      retrievalQueries: r.retrievalQueries,
+      missingFieldsBefore: r.missingFieldsBefore,
+      missingFieldsAfter: r.missingFieldsAfter,
+      nextAction: r.nextAction,
+      toolsCalled: r.toolsCalled as string[],
+      model: r.model,
+      latencyMs: r.latencyMs,
+      tokenUsage: (r.tokenUsage as AgentTurn['tokenUsage']) ?? undefined,
+      createdAt: r.createdAt,
+    }));
   }
 
   // ── Attachments ───────────────────────────────────────────────────────

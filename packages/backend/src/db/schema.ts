@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
 
 export const tenants = sqliteTable('tenants', {
   id: text('id').primaryKey(),
@@ -317,4 +317,63 @@ export const telemetryEvents = sqliteTable('telemetry_events', {
   deviceInfo: text('device_info'), // JSON
   properties: text('properties'), // JSON
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// ── Discovery: case state & traces ──────────────────────────────────────────
+// Server-side conversation state for the PM/TAM discovery agent. One case per
+// (tenant_id, session_id). See docs/pm_discovery_implementation_plan.md.
+
+export const discoveryCases = sqliteTable('discovery_cases', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull().references(() => tenants.id),
+  sessionId: text('session_id').notNull(),
+  type: text('type').notNull().default('unknown'),
+  status: text('status').notNull().default('open'),
+  platform: text('platform').notNull().default('web'),
+  featureRequestId: text('feature_request_id').references(() => featureRequests.id),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const conversationMessages = sqliteTable('conversation_messages', {
+  id: text('id').primaryKey(),
+  caseId: text('case_id').notNull().references(() => discoveryCases.id),
+  tenantId: text('tenant_id').notNull().references(() => tenants.id),
+  role: text('role').notNull(), // 'user' | 'assistant'
+  content: text('content').notNull(),
+  seq: integer('seq').notNull(), // monotonic per case
+  createdAt: text('created_at').notNull(),
+});
+
+export const extractedFacts = sqliteTable('extracted_facts', {
+  id: text('id').primaryKey(),
+  caseId: text('case_id').notNull().references(() => discoveryCases.id),
+  tenantId: text('tenant_id').notNull().references(() => tenants.id),
+  field: text('field').notNull(),
+  value: text('value').notNull(),
+  sourceType: text('source_type').notNull(), // 'customer' | 'kb' | 'agent' | 'pm'
+  sourceMessageId: text('source_message_id'),
+  confidence: real('confidence').notNull().default(0),
+  status: text('status').notNull().default('customer_stated'),
+  createdAt: text('created_at').notNull(),
+});
+
+export const agentTurns = sqliteTable('agent_turns', {
+  id: text('id').primaryKey(),
+  caseId: text('case_id').notNull().references(() => discoveryCases.id),
+  tenantId: text('tenant_id').notNull().references(() => tenants.id),
+  sessionId: text('session_id').notNull(),
+  userMessageId: text('user_message_id').notNull(),
+  assistantMessageId: text('assistant_message_id'),
+  intent: text('intent').notNull().default('unknown'),
+  factsExtracted: text('facts_extracted', { mode: 'json' }).notNull(),
+  retrievalQueries: text('retrieval_queries', { mode: 'json' }).notNull(),
+  missingFieldsBefore: text('missing_fields_before', { mode: 'json' }).notNull(),
+  missingFieldsAfter: text('missing_fields_after', { mode: 'json' }).notNull(),
+  nextAction: text('next_action').notNull(),
+  toolsCalled: text('tools_called', { mode: 'json' }).notNull(),
+  model: text('model').notNull(),
+  latencyMs: integer('latency_ms').notNull(),
+  tokenUsage: text('token_usage', { mode: 'json' }),
+  createdAt: text('created_at').notNull(),
 });

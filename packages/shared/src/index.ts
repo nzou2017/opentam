@@ -336,3 +336,83 @@ export interface SpiderJob {
   error?: string;
   createdAt: string;
 }
+
+// ── Discovery: case state & traces ───────────────────────────────────────
+// Server-side conversation state for the PM/TAM discovery agent. Keyed by
+// (tenantId, sessionId) so the agent's memory lives in the operational DB
+// rather than being supplied by the client. See
+// docs/pm_discovery_implementation_plan.md.
+
+export type CaseType = 'feature_request' | 'bug_report' | 'positive_feedback' | 'unknown';
+export type CaseStatus = 'open' | 'ready' | 'filed' | 'abandoned';
+
+export interface DiscoveryCase {
+  id: string;
+  tenantId: string;
+  sessionId: string;           // natural key with tenantId
+  type: CaseType;              // starts 'unknown'; reclassified in later phases
+  status: CaseStatus;          // 'open' until Phase 3 marks it 'ready'/'filed'
+  platform: Platform;
+  featureRequestId?: string;   // set when a handoff is filed (Phase 3)
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MessageRole = 'user' | 'assistant';
+
+export interface ConversationMessage {
+  id: string;
+  caseId: string;
+  tenantId: string;
+  role: MessageRole;
+  content: string;
+  seq: number;                 // monotonic per case; server-assigned
+  createdAt: string;
+}
+
+// Provenance per fact (design doc §7). Written best-effort in Phase 1,
+// consumed by the playbook engine in Phase 2.
+export type FactStatus =
+  | 'unknown' | 'inferred' | 'customer_stated'
+  | 'customer_confirmed' | 'kb_supported' | 'conflicting';
+
+export interface ExtractedFact {
+  id: string;
+  caseId: string;
+  tenantId: string;
+  field: string;               // e.g. 'problem_statement'
+  value: string;
+  sourceType: 'customer' | 'kb' | 'agent' | 'pm';
+  sourceMessageId?: string;
+  confidence: number;          // 0..1
+  status: FactStatus;
+  createdAt: string;
+}
+
+export interface AgentTurnTokenUsage {
+  input: number;
+  output: number;
+}
+
+// One row per chat request — the "why" record (design doc §28). The JSON
+// blob fields are placeholders in Phase 1 (empty arrays) and get populated
+// once fact extraction and the playbook engine land in Phase 2.
+export interface AgentTurn {
+  id: string;
+  caseId: string;
+  tenantId: string;
+  sessionId: string;
+  userMessageId: string;
+  assistantMessageId?: string;
+  intent: CaseType;
+  factsExtracted: unknown;
+  retrievalQueries: unknown;
+  missingFieldsBefore: unknown;
+  missingFieldsAfter: unknown;
+  nextAction: string;
+  toolsCalled: string[];
+  model: string;
+  latencyMs: number;
+  tokenUsage?: AgentTurnTokenUsage;
+  createdAt: string;
+}
