@@ -137,6 +137,7 @@ export async function runChatAgent(
   appVersion?: string,
   deviceInfo?: DeviceInfo,
   sessionId?: string,
+  discoveryDirective?: string,
 ): Promise<{ reply: string; intervention?: InterventionCommand }> {
   const feedbackContext: FeedbackContext = { platform, currentUrl, screenName, appVersion, deviceInfo, sessionId };
 
@@ -216,7 +217,7 @@ User question: ${message}`;
     const response = await client.messages.create({
       model: resolvedModel,
       max_tokens: 512,
-      system: getChatSystemPrompt(platform) + buildMultilingualDirective(kbLanguage),
+      system: getChatSystemPrompt(platform) + buildMultilingualDirective(kbLanguage) + (discoveryDirective ?? ''),
       tools: toolDefs,
       messages,
     });
