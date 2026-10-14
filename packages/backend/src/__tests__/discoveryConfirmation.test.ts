@@ -39,7 +39,7 @@ function chat(sessionId: string, message: string) {
 }
 
 function extraction(result: Partial<ExtractionResult> & Pick<ExtractionResult, 'caseType' | 'facts'>) {
-  extractFactsMock.mockResolvedValueOnce({ confirmation: 'none', ...result });
+  extractFactsMock.mockResolvedValueOnce({ confirmation: 'none', productClaims: [], ...result });
 }
 
 const ALL_FEATURE_FACTS = [

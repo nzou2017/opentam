@@ -22,6 +22,12 @@ export interface ExtractionResult {
   caseType: CaseType;
   facts: ExtractedFactInput[];
   confirmation: ConfirmationSignal;
+  /**
+   * Assertions the user made about what the product currently does or doesn't
+   * do — checked against the KB for contradictions (design doc §15). Empty when
+   * the user made no product-capability claims.
+   */
+  productClaims: string[];
 }
 
 const CONFIRMATIONS: ConfirmationSignal[] = ['affirm', 'deny', 'none'];
@@ -74,8 +80,14 @@ function buildExtractionTool(): Anthropic.Tool {
           description:
             'If the agent previously asked the user to confirm a summary: affirm (they agreed it is accurate), deny (they said it is wrong or want changes), or none (not a confirmation reply).',
         },
+        product_claims: {
+          type: 'array',
+          description:
+            'Statements the user made asserting what the product currently DOES or DOES NOT do (e.g. "I can already configure templates per reason"). Empty if the user made no such capability claims.',
+          items: { type: 'string' },
+        },
       },
-      required: ['case_type', 'facts', 'confirmation'],
+      required: ['case_type', 'facts', 'confirmation', 'product_claims'],
     },
   };
 }
@@ -97,7 +109,7 @@ export const extractFacts: FactExtractor = async ({ message, history, currentTyp
   const tenantSettings = await store.getTenantSettings(tenantId);
   const provider = tenantSettings?.llmProvider ?? config.llmProvider;
   if (provider !== 'anthropic') {
-    return { caseType: currentType, facts: [], confirmation: 'none' };
+    return { caseType: currentType, facts: [], confirmation: 'none', productClaims: [] };
   }
 
   const client = new Anthropic({ apiKey: tenantSettings?.llmApiKey ?? config.anthropicApiKey });
@@ -120,7 +132,7 @@ export const extractFacts: FactExtractor = async ({ message, history, currentTyp
 
   for (const block of response.content) {
     if (block.type === 'tool_use' && block.name === 'record_discovery') {
-      const input = block.input as { case_type?: string; facts?: ExtractedFactInput[]; confirmation?: string };
+      const input = block.input as { case_type?: string; facts?: ExtractedFactInput[]; confirmation?: string; product_claims?: unknown };
       const caseType = CASE_TYPES.includes(input.case_type as CaseType)
         ? (input.case_type as CaseType)
         : currentType;
@@ -136,9 +148,12 @@ export const extractFacts: FactExtractor = async ({ message, history, currentTyp
       const confirmation = CONFIRMATIONS.includes(input.confirmation as ConfirmationSignal)
         ? (input.confirmation as ConfirmationSignal)
         : 'none';
-      return { caseType, facts, confirmation };
+      const productClaims = Array.isArray(input.product_claims)
+        ? input.product_claims.filter((c): c is string => typeof c === 'string' && c.trim().length > 0)
+        : [];
+      return { caseType, facts, confirmation, productClaims };
     }
   }
 
-  return { caseType: currentType, facts: [], confirmation: 'none' };
+  return { caseType: currentType, facts: [], confirmation: 'none', productClaims: [] };
 };

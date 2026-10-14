@@ -34,7 +34,7 @@ export async function ingestText(
 
   await ensureIndex();
   const embeddings = await embedTexts(chunks, tenantId);
-  await upsertChunks(tenantId, docId, chunks, embeddings);
+  await upsertChunks(tenantId, docId, chunks, embeddings, { documentType: mimeType });
 
   return { chunks: chunks.length };
 }
@@ -61,7 +61,7 @@ export async function ingestBuffer(
 
   await ensureIndex();
   const embeddings = await embedTexts(chunks, tenantId);
-  await upsertChunks(tenantId, docId, chunks, embeddings);
+  await upsertChunks(tenantId, docId, chunks, embeddings, { documentType: mimeType });
 
   return { chunks: chunks.length };
 }

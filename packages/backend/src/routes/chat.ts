@@ -8,6 +8,8 @@ import { getStore } from '../db/index.js';
 import { runChatAgent } from '../agent/chatAgent.js';
 import { runDiscoveryStep } from '../agent/discovery.js';
 import { extractFacts } from '../agent/factExtractor.js';
+import { anthropicContradictionJudge } from '../agent/contradiction.js';
+import { chromaKnowledgeService } from '../services/knowledgeService.js';
 import { MODEL_BY_PLAN } from '../services/interventionService.js';
 import { config } from '../config.js';
 import { usageLimiter } from '../middleware/planLimits.js';
@@ -103,6 +105,8 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           userMessageId,
           history: effectiveHistory,
           extractor: extractFacts,
+          knowledge: chromaKnowledgeService,
+          judge: anthropicContradictionJudge,
         });
       }
 
@@ -131,7 +135,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           assistantMessageId: asstMsg.id,
           intent: discovery?.intent ?? caseRow.type,
           factsExtracted: discovery?.factsExtracted ?? [],
-          retrievalQueries: [],
+          retrievalQueries: discovery?.retrievalQueries ?? [],
           missingFieldsBefore: discovery?.missingBefore ?? [],
           missingFieldsAfter: discovery?.missingAfter ?? [],
           nextAction,
