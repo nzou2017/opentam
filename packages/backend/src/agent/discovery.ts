@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { randomUUID } from 'node:crypto';
-import type { CaseType, DiscoveryCase, ExtractedFact } from '@opentam/shared';
+import type { CaseType, CaseStatus, DiscoveryCase, ExtractedFact, FeedbackType, Requirement } from '@opentam/shared';
 import type { Store } from '../db/store.js';
 import { getPlaybook, evaluatePlaybook } from '../playbooks/index.js';
-import type { PlaybookEvaluation } from '../playbooks/index.js';
+import type { Playbook, PlaybookEvaluation } from '../playbooks/index.js';
 import type { FactExtractor } from './factExtractor.js';
 
 export interface DiscoveryStepResult {
@@ -20,10 +20,16 @@ export interface DiscoveryStepResult {
   evaluation: PlaybookEvaluation | null;
   /**
    * Compact instruction appended to the responder's system prompt so it asks
-   * the single highest-value next question (design doc §10/§24). Empty when
-   * there is no active playbook or nothing required is missing.
+   * the next question, presents the confirmation summary, or acknowledges the
+   * handoff (design doc §10/§23/§24). Empty when there's nothing to steer.
    */
   directive: string;
+  /** What the agent is doing this turn: ask | confirm | handoff | answer. */
+  nextAction: string;
+  /** Case status after this turn. */
+  statusAfter: CaseStatus;
+  /** The feature_requests row filed this turn, if any. */
+  featureRequestId?: string;
 }
 
 // Human-readable prompts per field — keeps the question goal concrete for the
@@ -44,7 +50,15 @@ const FIELD_PROMPTS: Record<string, string> = {
   frequency: 'how often this happens',
 };
 
-function buildDirective(evaluation: PlaybookEvaluation): string {
+/** Latest non-empty value per field (append-only facts; most recent wins). */
+function latestValues(facts: ExtractedFact[]): Map<string, string> {
+  const sorted = [...facts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const map = new Map<string, string>();
+  for (const f of sorted) if (f.value && f.value.trim()) map.set(f.field, f.value);
+  return map;
+}
+
+function buildNextQuestionDirective(evaluation: PlaybookEvaluation): string {
   if (!evaluation.nextGoal) return '';
   const goalPrompt = FIELD_PROMPTS[evaluation.nextGoal] ?? evaluation.nextGoal.replace(/_/g, ' ');
   const known = evaluation.present.length ? evaluation.present.join(', ') : 'nothing yet';
@@ -56,11 +70,136 @@ Still needed (most important first): ${evaluation.missing.join(', ')}.
 Your next goal is to learn ${goalPrompt}. Ask ONE natural, specific question toward that goal — do not interrogate with a checklist, and acknowledge what they already told you.`;
 }
 
+function buildConfirmationDirective(values: Map<string, string>, playbook: Playbook): string {
+  const lines = [...playbook.requiredFields, ...playbook.recommendedFields]
+    .filter((f) => values.has(f))
+    .map((f) => `- ${f.replace(/_/g, ' ')}: ${values.get(f)}`)
+    .join('\n');
+  return `
+
+DISCOVERY CONTEXT (do not mention this block to the user):
+You now have all the key details. Give the user a short, structured recap of your understanding (current situation, problem, desired outcome, impact, example as applicable), then ask: "Is this an accurate description of what you're requesting?" Do not ask for anything new.
+Details to summarize:
+${lines}`;
+}
+
+function buildFiledDirective(intent: CaseType): string {
+  const label = intent === 'bug_report' ? 'bug report' : 'feature request';
+  return `
+
+DISCOVERY CONTEXT (do not mention this block to the user):
+The user confirmed. Tell them their ${label} has been recorded and shared with the product team. Keep it brief and warm; do not ask anything further.`;
+}
+
+function buildCorrectionDirective(): string {
+  return `
+
+DISCOVERY CONTEXT (do not mention this block to the user):
+The user says the summary isn't quite right. Ask them, in one sentence, what to correct or add.`;
+}
+
+/** Synthesize the first-class requirement statement from confirmed facts (§21). */
+function buildRequirementStatement(intent: CaseType, v: Map<string, string>): string {
+  if (intent === 'bug_report') {
+    const expected = v.get('expected_behavior') ?? 'behave correctly';
+    const actual = v.get('actual_behavior');
+    return actual
+      ? `The product shall ${expected}; currently it ${actual}.`
+      : `The product shall ${expected}.`;
+  }
+  const outcome = v.get('desired_outcome') ?? v.get('problem_statement') ?? 'address the reported need';
+  return `The product shall ${outcome}.`;
+}
+
+/** Build the engineering-facing handoff title + description from facts (§19/§27). */
+function buildHandoff(intent: CaseType, v: Map<string, string>): { title: string; description: string } {
+  const section = (label: string, field: string) => (v.has(field) ? `${label}:\n${v.get(field)}` : null);
+  let title: string;
+  let parts: (string | null)[];
+  if (intent === 'bug_report') {
+    title = v.get('actual_behavior') ?? v.get('expected_behavior') ?? 'Bug report';
+    parts = [
+      section('Expected behavior', 'expected_behavior'),
+      section('Actual behavior', 'actual_behavior'),
+      section('Reproduction steps', 'reproduction_steps'),
+      section('Environment', 'environment'),
+      section('Impact', 'impact'),
+      section('Frequency', 'frequency'),
+      section('First observed', 'first_observed'),
+      section('Workaround', 'workaround'),
+    ];
+  } else {
+    title = v.get('problem_statement') ?? v.get('desired_outcome') ?? 'Feature request';
+    parts = [
+      section('Problem', 'problem_statement'),
+      section('Affected users', 'affected_persona'),
+      section('Current workflow', 'current_workflow'),
+      section('Desired outcome', 'desired_outcome'),
+      section('Business impact', 'business_impact'),
+      section('Example', 'example_scenario'),
+      section('Frequency', 'frequency'),
+      section('Workaround', 'workaround'),
+    ];
+  }
+  return { title: title.slice(0, 100), description: parts.filter(Boolean).join('\n\n') };
+}
+
+/**
+ * File a confirmed case: create the handoff feature_requests row, synthesize a
+ * first-class requirement linked to it, and mark the case filed. Returns the new
+ * feature_requests id.
+ */
+async function finalizeCase(args: {
+  store: Store;
+  caseRow: DiscoveryCase;
+  tenantId: string;
+  intent: CaseType;
+  facts: ExtractedFact[];
+}): Promise<string> {
+  const { store, caseRow, tenantId, intent, facts } = args;
+  const v = latestValues(facts);
+  const now = new Date().toISOString();
+
+  const feedbackType: FeedbackType = intent === 'bug_report' ? 'bug_report' : 'feature_request';
+  const { title, description } = buildHandoff(intent, v);
+  const featureRequestId = `fr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  await store.createFeatureRequest({
+    id: featureRequestId,
+    tenantId,
+    type: feedbackType,
+    title,
+    description: `${description}\n\n— Captured by Q discovery agent (customer-confirmed).`,
+    status: 'new',
+    votes: 0,
+    submittedBy: 'q-discovery-agent',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const requirement: Requirement = {
+    id: randomUUID(),
+    caseId: caseRow.id,
+    tenantId,
+    statement: buildRequirementStatement(intent, v),
+    type: intent === 'bug_report' ? 'bug_fix' : 'functional',
+    status: 'confirmed',
+    customerConfirmed: true,
+    sourceFactIds: facts.map((f) => f.id),
+    featureRequestId,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await store.createRequirement(requirement);
+
+  await store.updateCase(caseRow.id, tenantId, { status: 'filed', featureRequestId });
+  return featureRequestId;
+}
+
 /**
  * Run one discovery turn over persisted case state (design doc §25):
- * extract facts → merge into the case → re-evaluate the playbook → produce the
- * next-question directive and the trace fields. Pure orchestration around the
- * injected `extractor` and the `store`; the responder LLM call happens after.
+ * extract → merge → evaluate → drive the lifecycle (collect → confirm → file).
+ * Pure orchestration around the injected `extractor` and the `store`; the
+ * responder LLM call happens after, steered by the returned directive.
  */
 export async function runDiscoveryStep(args: {
   store: Store;
@@ -74,57 +213,83 @@ export async function runDiscoveryStep(args: {
   const { store, caseRow, tenantId, message, userMessageId, history, extractor } = args;
 
   const existingFacts = await store.getFacts(caseRow.id, tenantId);
-
-  // Missing-before baseline (against the case's current type).
   const beforePlaybook = getPlaybook(caseRow.type);
   const missingBefore = beforePlaybook ? evaluatePlaybook(beforePlaybook, existingFacts).missing : [];
 
-  // 1. Extract structured facts + (re)classify intent.
-  const { caseType, facts } = await extractor({ message, history, currentType: caseRow.type, tenantId });
+  // 1. Extract facts + (re)classify intent + detect confirmation.
+  const { caseType, facts, confirmation } = await extractor({ message, history, currentType: caseRow.type, tenantId });
 
-  // 2. Reclassify the case when extraction is confident about a concrete type
-  //    (design doc §9 — initial classification isn't permanent).
+  // 2. Reclassify when extraction is confident about a concrete type (§9).
   let intent = caseRow.type;
-  if (caseType !== 'unknown' && caseType !== caseRow.type) {
+  if (caseType !== 'unknown') {
     intent = caseType;
-    await store.updateCase(caseRow.id, tenantId, { type: caseType });
-  } else if (caseType !== 'unknown') {
-    intent = caseType;
+    if (caseType !== caseRow.type) await store.updateCase(caseRow.id, tenantId, { type: caseType });
   }
 
-  // 3. Persist the newly stated facts (append-only, with provenance — §7).
+  // 3. Persist newly stated facts (append-only, with provenance — §7).
   const now = new Date().toISOString();
   const persisted: ExtractedFact[] = [];
   for (const f of facts) {
     const fact: ExtractedFact = {
-      id: randomUUID(),
-      caseId: caseRow.id,
-      tenantId,
-      field: f.field,
-      value: f.value,
-      sourceType: 'customer',
-      sourceMessageId: userMessageId,
-      confidence: f.confidence,
-      status: 'customer_stated',
-      createdAt: now,
+      id: randomUUID(), caseId: caseRow.id, tenantId,
+      field: f.field, value: f.value,
+      sourceType: 'customer', sourceMessageId: userMessageId,
+      confidence: f.confidence, status: 'customer_stated', createdAt: now,
     };
     await store.addFact(fact);
     persisted.push(fact);
   }
+  const allFacts = [...existingFacts, ...persisted];
 
-  // 4. Re-evaluate against the (possibly new) active playbook.
+  const base = { intent, factsExtracted: facts, missingBefore };
+
   const playbook = getPlaybook(intent);
   if (!playbook) {
-    return { intent, factsExtracted: facts, missingBefore, missingAfter: [], evaluation: null, directive: '' };
+    // No discovery playbook (unknown / positive_feedback) — nothing to collect.
+    return { ...base, missingAfter: [], evaluation: null, directive: '', nextAction: 'answer', statusAfter: caseRow.status };
   }
-  const evaluation = evaluatePlaybook(playbook, [...existingFacts, ...persisted]);
 
+  const evaluation = evaluatePlaybook(playbook, allFacts);
+  const complete = evaluation.missing.length === 0;
+  const values = latestValues(allFacts);
+
+  // Already handed off — keep answering, don't re-file.
+  if (caseRow.status === 'filed') {
+    return { ...base, missingAfter: evaluation.missing, evaluation, directive: '', nextAction: 'answer', statusAfter: 'filed' };
+  }
+
+  // Awaiting the customer's confirmation of the summary (§23).
+  if (caseRow.status === 'awaiting_confirmation') {
+    if (confirmation === 'affirm' && complete) {
+      const featureRequestId = await finalizeCase({ store, caseRow, tenantId, intent, facts: allFacts });
+      return { ...base, missingAfter: [], evaluation, directive: buildFiledDirective(intent), nextAction: 'handoff', statusAfter: 'filed', featureRequestId };
+    }
+    if (confirmation === 'deny') {
+      await store.updateCase(caseRow.id, tenantId, { status: 'open' });
+      return { ...base, missingAfter: evaluation.missing, evaluation, directive: buildCorrectionDirective(), nextAction: 'ask', statusAfter: 'open' };
+    }
+    if (complete) {
+      // Unclear reply but still complete — re-present the summary.
+      return { ...base, missingAfter: [], evaluation, directive: buildConfirmationDirective(values, playbook), nextAction: 'confirm', statusAfter: 'awaiting_confirmation' };
+    }
+    // New info opened a gap — go back to collecting.
+    await store.updateCase(caseRow.id, tenantId, { status: 'open' });
+    return { ...base, missingAfter: evaluation.missing, evaluation, directive: buildNextQuestionDirective(evaluation), nextAction: 'ask', statusAfter: 'open' };
+  }
+
+  // Open case that just became complete — present the confirmation summary (§23).
+  if (complete && caseRow.status === 'open') {
+    await store.updateCase(caseRow.id, tenantId, { status: 'awaiting_confirmation' });
+    return { ...base, missingAfter: [], evaluation, directive: buildConfirmationDirective(values, playbook), nextAction: 'confirm', statusAfter: 'awaiting_confirmation' };
+  }
+
+  // Still collecting.
   return {
-    intent,
-    factsExtracted: facts,
-    missingBefore,
+    ...base,
     missingAfter: evaluation.missing,
     evaluation,
-    directive: buildDirective(evaluation),
+    directive: buildNextQuestionDirective(evaluation),
+    nextAction: evaluation.missing.length ? 'ask' : 'answer',
+    statusAfter: caseRow.status,
   };
 }

@@ -358,6 +358,20 @@ export const extractedFacts = sqliteTable('extracted_facts', {
   createdAt: text('created_at').notNull(),
 });
 
+export const requirements = sqliteTable('requirements', {
+  id: text('id').primaryKey(),
+  caseId: text('case_id').notNull().references(() => discoveryCases.id),
+  tenantId: text('tenant_id').notNull().references(() => tenants.id),
+  statement: text('statement').notNull(),
+  type: text('type').notNull(), // 'functional' | 'bug_fix'
+  status: text('status').notNull().default('draft'),
+  customerConfirmed: integer('customer_confirmed', { mode: 'boolean' }).notNull().default(false),
+  sourceFactIds: text('source_fact_ids', { mode: 'json' }).notNull(),
+  featureRequestId: text('feature_request_id').references(() => featureRequests.id),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const agentTurns = sqliteTable('agent_turns', {
   id: text('id').primaryKey(),
   caseId: text('case_id').notNull().references(() => discoveryCases.id),

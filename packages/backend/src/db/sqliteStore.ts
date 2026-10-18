@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { eq, and, isNull, sql, gte, like, desc, asc } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion, Platform, DiscoveryCase, ConversationMessage, ExtractedFact, AgentTurn } from '@opentam/shared';
+import type { Tenant, FunctionalMapEntry, InterventionLog, Workflow, WorkflowStep, WorkflowStatus, FeatureRequest, FeedbackType, FeatureRequestStatus, AuditLogEntry, SurveyDefinition, SurveyResponse, SurveyQuestion, Platform, DiscoveryCase, ConversationMessage, ExtractedFact, AgentTurn, Requirement } from '@opentam/shared';
 import type { Store, User, AuthSession, Integration, IntegrationTrigger, UsageLimits, TenantSettings, TelemetryEventRecord, ServerLicense, TeamInvite, CrawlJob, GithubCrawlJob, Attachment } from './store.js';
 import * as schema from './schema.js';
 import { encrypt, decrypt } from '../crypto.js';
@@ -353,6 +353,21 @@ export class SqliteStore implements Store {
       );
       CREATE INDEX IF NOT EXISTS idx_agent_turns_case ON agent_turns(case_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_agent_turns_tenant ON agent_turns(tenant_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS requirements (
+        id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES discovery_cases(id),
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        statement TEXT NOT NULL,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        customer_confirmed INTEGER NOT NULL DEFAULT 0,
+        source_fact_ids TEXT NOT NULL,
+        feature_request_id TEXT REFERENCES feature_requests(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_requirements_case ON requirements(case_id);
     `);
 
     // Migrations for auth hardening columns (safe to run on existing DBs)
@@ -1717,6 +1732,41 @@ export class SqliteStore implements Store {
       latencyMs: r.latencyMs,
       tokenUsage: (r.tokenUsage as AgentTurn['tokenUsage']) ?? undefined,
       createdAt: r.createdAt,
+    }));
+  }
+
+  async createRequirement(req: Requirement): Promise<void> {
+    this.db.insert(schema.requirements).values({
+      id: req.id,
+      caseId: req.caseId,
+      tenantId: req.tenantId,
+      statement: req.statement,
+      type: req.type,
+      status: req.status,
+      customerConfirmed: req.customerConfirmed,
+      sourceFactIds: req.sourceFactIds,
+      featureRequestId: req.featureRequestId ?? null,
+      createdAt: req.createdAt,
+      updatedAt: req.updatedAt,
+    }).run();
+  }
+
+  async getRequirementsByCase(caseId: string, tenantId: string): Promise<Requirement[]> {
+    const rows = this.db.select().from(schema.requirements)
+      .where(and(eq(schema.requirements.caseId, caseId), eq(schema.requirements.tenantId, tenantId)))
+      .orderBy(asc(schema.requirements.createdAt)).all();
+    return rows.map((r) => ({
+      id: r.id,
+      caseId: r.caseId,
+      tenantId: r.tenantId,
+      statement: r.statement,
+      type: r.type as Requirement['type'],
+      status: r.status as Requirement['status'],
+      customerConfirmed: r.customerConfirmed,
+      sourceFactIds: (r.sourceFactIds as string[]) ?? [],
+      featureRequestId: r.featureRequestId ?? undefined,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
     }));
   }
 
