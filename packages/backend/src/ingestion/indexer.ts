@@ -43,11 +43,16 @@ export async function upsertChunks(
   docId: string,
   chunks: string[],
   embeddings: number[][],
+  docMetadata?: { documentType?: string; updatedAt?: string },
 ): Promise<void> {
   const collection = await getCollection(tenantId);
 
   const ids = chunks.map((_, i) => `${docId}-chunk-${i}`);
-  const metadatas = chunks.map((_, i) => ({ tenantId, docId, chunkIndex: i }));
+  // Enrich chunk metadata so retrieval can filter/rank by it later (design doc §12).
+  const base: Record<string, string | number> = { tenantId, docId };
+  if (docMetadata?.documentType) base.documentType = docMetadata.documentType;
+  base.updatedAt = docMetadata?.updatedAt ?? new Date().toISOString();
+  const metadatas = chunks.map((_, i) => ({ ...base, chunkIndex: i }));
 
   // ChromaDB upsert in batches of 100
   const BATCH = 100;
@@ -68,13 +73,14 @@ export async function searchDocs(
   tenantId: string,
   queryEmbedding: number[],
   topK = 5,
+  where?: Record<string, unknown>,
 ): Promise<Array<{ text: string; score: number; docId: string }>> {
   const collection = await getCollection(tenantId);
 
-  const result = await collection.query({
-    queryEmbeddings: [queryEmbedding],
-    nResults: topK,
-  });
+  // Metadata filtering combined with semantic similarity (design doc §12).
+  const queryArgs: Record<string, unknown> = { queryEmbeddings: [queryEmbedding], nResults: topK };
+  if (where && Object.keys(where).length > 0) queryArgs.where = where;
+  const result = await collection.query(queryArgs as Parameters<typeof collection.query>[0]);
 
   const docs = result.documents[0] ?? [];
   const distances = result.distances?.[0] ?? [];

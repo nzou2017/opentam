@@ -7,6 +7,9 @@ import type { Store } from '../db/store.js';
 import { getPlaybook, evaluatePlaybook } from '../playbooks/index.js';
 import type { Playbook, PlaybookEvaluation } from '../playbooks/index.js';
 import type { FactExtractor } from './factExtractor.js';
+import { detectContradictions } from './contradiction.js';
+import type { Contradiction, ContradictionJudge } from './contradiction.js';
+import type { KnowledgeService } from '../services/knowledgeService.js';
 
 export interface DiscoveryStepResult {
   /** Case type after (possibly) reclassifying this turn. */
@@ -30,6 +33,21 @@ export interface DiscoveryStepResult {
   statusAfter: CaseStatus;
   /** The feature_requests row filed this turn, if any. */
   featureRequestId?: string;
+  /** Customer beliefs this turn that the product KB contradicts (design doc §15). */
+  contradictions: Contradiction[];
+  /** Product claims searched against the KB this turn (for the trace, design doc §28). */
+  retrievalQueries: string[];
+}
+
+function buildContradictionDirective(contradictions: Contradiction[]): string {
+  const lines = contradictions
+    .map((c) => `- They believe: "${c.customerClaim}" — but the docs indicate: "${c.kbClaim}".`)
+    .join('\n');
+  return `
+
+DISCOVERY CONTEXT (do not mention this block to the user):
+The user stated beliefs about the product that the documentation contradicts. Do NOT confirm these as working. Gently clarify each before proceeding:
+${lines}`;
 }
 
 // Human-readable prompts per field — keeps the question goal concrete for the
@@ -209,15 +227,27 @@ export async function runDiscoveryStep(args: {
   userMessageId: string;
   history: { role: 'user' | 'assistant'; content: string }[];
   extractor: FactExtractor;
+  // Optional — when both are provided, the user's product claims are checked
+  // against the KB for contradictions (design doc §15). Omitted in tests/non-
+  // Anthropic deployments, where contradiction detection simply doesn't run.
+  knowledge?: KnowledgeService;
+  judge?: ContradictionJudge;
 }): Promise<DiscoveryStepResult> {
-  const { store, caseRow, tenantId, message, userMessageId, history, extractor } = args;
+  const { store, caseRow, tenantId, message, userMessageId, history, extractor, knowledge, judge } = args;
 
   const existingFacts = await store.getFacts(caseRow.id, tenantId);
   const beforePlaybook = getPlaybook(caseRow.type);
   const missingBefore = beforePlaybook ? evaluatePlaybook(beforePlaybook, existingFacts).missing : [];
 
-  // 1. Extract facts + (re)classify intent + detect confirmation.
-  const { caseType, facts, confirmation } = await extractor({ message, history, currentType: caseRow.type, tenantId });
+  // 1. Extract facts + (re)classify intent + detect confirmation + product claims.
+  const { caseType, facts, confirmation, productClaims } = await extractor({ message, history, currentType: caseRow.type, tenantId });
+
+  // Contradiction detection (§15): check the user's product-capability claims
+  // against the KB. Independent of the collection lifecycle below.
+  let contradictions: Contradiction[] = [];
+  if (productClaims.length > 0 && knowledge && judge) {
+    contradictions = await detectContradictions({ claims: productClaims, tenantId, knowledge, judge });
+  }
 
   // 2. Reclassify when extraction is confident about a concrete type (§9).
   let intent = caseRow.type;
@@ -241,8 +271,11 @@ export async function runDiscoveryStep(args: {
   }
   const allFacts = [...existingFacts, ...persisted];
 
-  const base = { intent, factsExtracted: facts, missingBefore };
+  // Every lifecycle branch carries the contradiction fields; the contradiction
+  // directive is prepended once, after the branch decides its own directive.
+  const base = { intent, factsExtracted: facts, missingBefore, contradictions, retrievalQueries: productClaims };
 
+  const decided: DiscoveryStepResult = await (async (): Promise<DiscoveryStepResult> => {
   const playbook = getPlaybook(intent);
   if (!playbook) {
     // No discovery playbook (unknown / positive_feedback) — nothing to collect.
@@ -292,4 +325,10 @@ export async function runDiscoveryStep(args: {
     nextAction: evaluation.missing.length ? 'ask' : 'answer',
     statusAfter: caseRow.status,
   };
+  })();
+
+  // Surface contradictions regardless of lifecycle stage by prepending the
+  // warning to whatever directive the branch produced.
+  const prefix = contradictions.length > 0 ? buildContradictionDirective(contradictions) : '';
+  return { ...decided, directive: prefix + decided.directive };
 }
