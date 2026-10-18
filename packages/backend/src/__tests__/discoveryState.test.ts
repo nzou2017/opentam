@@ -9,6 +9,12 @@ import type { FastifyInstance } from 'fastify';
 const { runChatAgentMock } = vi.hoisted(() => ({ runChatAgentMock: vi.fn() }));
 vi.mock('../agent/chatAgent.js', () => ({ runChatAgent: runChatAgentMock }));
 
+// Stub the shared structured-LLM helper so the discovery pipeline (fact
+// extraction + contradiction judging) makes no real LLM call. Returning null
+// makes both degrade to their no-op results — this test is about route wiring
+// / history authority, not extraction behavior.
+vi.mock('../agent/structuredLlm.js', () => ({ callStructuredTool: vi.fn().mockResolvedValue(null) }));
+
 import { buildApp, SDK_KEY, TENANT_ID } from './setup.js';
 import { getStore } from '../db/index.js';
 import { config } from '../config.js';
