@@ -79,9 +79,10 @@ export const config = {
 
   // ── Discovery agent ─────────────────────────────────────────────────────────
   // When true, /api/v1/chat persists conversation state server-side (cases,
-  // messages, per-turn traces) and loads history from the DB instead of
-  // trusting the client-supplied `history` array. Off by default — pure
-  // substrate for the PM/TAM discovery agent (Phase 1), no reply-behavior
-  // change. See docs/pm_discovery_implementation_plan.md.
-  discoveryState: process.env.DISCOVERY_STATE === 'true',
+  // messages, per-turn traces), loads history from the DB instead of trusting
+  // the client-supplied `history` array, and runs the discovery pipeline (fact
+  // extraction → playbook evaluation → contradiction detection → next-question
+  // directive). On by default now that Phases 1–4 have landed; set
+  // DISCOVERY_STATE=false to opt out. See docs/pm_discovery_implementation_plan.md.
+  discoveryState: process.env.DISCOVERY_STATE !== 'false',
 } as const;

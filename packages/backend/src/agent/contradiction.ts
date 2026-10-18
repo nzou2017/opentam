@@ -1,10 +1,9 @@
 // Copyright (C) 2026 Ning Zou <q.cue.2026@gmail.com>
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import Anthropic from '@anthropic-ai/sdk';
-import { config } from '../config.js';
-import { getStore } from '../db/index.js';
 import { buildEvidence } from './evidence.js';
+import { callStructuredTool } from './structuredLlm.js';
+import type { StructuredTool } from './structuredLlm.js';
 import type { KnowledgeService } from '../services/knowledgeService.js';
 
 // Contradiction detection (design doc §15): when a customer asserts something
@@ -74,11 +73,11 @@ const JUDGE_SYSTEM = `You compare a customer's belief about a product against ex
 Decide only whether the documentation directly CONTRADICTS the customer's belief (says something incompatible with it).
 Not finding confirmation is NOT a contradiction — only flag a conflict when the docs state something incompatible.`;
 
-function buildJudgeTool(): Anthropic.Tool {
+function buildJudgeTool(): StructuredTool {
   return {
     name: 'record_contradiction_check',
     description: 'Report whether the documentation contradicts the customer belief.',
-    input_schema: {
+    schema: {
       type: 'object' as const,
       properties: {
         conflict: { type: 'boolean', description: 'True only if the docs state something incompatible with the belief.' },
@@ -90,35 +89,23 @@ function buildJudgeTool(): Anthropic.Tool {
 }
 
 /**
- * Default judge: one Anthropic call with a forced tool. No-ops to "no conflict"
- * for non-Anthropic tenants (same policy as the fact extractor).
+ * Default judge: one forced-tool LLM call, dispatched to whichever provider the
+ * tenant runs (Anthropic or any OpenAI-compatible endpoint — see
+ * {@link callStructuredTool}). No-ops to "no conflict" when the provider isn't
+ * configured or returns nothing usable (same degrade-to-safe policy as the
+ * fact extractor).
  */
-export const anthropicContradictionJudge: ContradictionJudge = async ({ customerClaim, evidenceText, tenantId }) => {
-  const store = getStore();
-  const tenantSettings = await store.getTenantSettings(tenantId);
-  const provider = tenantSettings?.llmProvider ?? config.llmProvider;
-  if (provider !== 'anthropic') return { conflict: false, kbClaim: '' };
-
-  const client = new Anthropic({ apiKey: tenantSettings?.llmApiKey ?? config.anthropicApiKey });
-  const model = tenantSettings?.llmModel ?? config.model;
-
-  const response = await client.messages.create({
-    model,
-    max_tokens: 512,
+export const defaultContradictionJudge: ContradictionJudge = async ({ customerClaim, evidenceText, tenantId }) => {
+  const input = await callStructuredTool({
+    tenantId,
     system: JUDGE_SYSTEM,
-    tools: [buildJudgeTool()],
-    tool_choice: { type: 'tool', name: 'record_contradiction_check' },
     messages: [{
       role: 'user',
       content: `Customer belief: ${customerClaim}\n\nDocumentation excerpts:\n${evidenceText}`,
     }],
-  });
+    tool: buildJudgeTool(),
+  }) as { conflict?: boolean; kb_claim?: string } | null;
 
-  for (const block of response.content) {
-    if (block.type === 'tool_use' && block.name === 'record_contradiction_check') {
-      const input = block.input as { conflict?: boolean; kb_claim?: string };
-      return { conflict: Boolean(input.conflict), kbClaim: typeof input.kb_claim === 'string' ? input.kb_claim : '' };
-    }
-  }
-  return { conflict: false, kbClaim: '' };
+  if (!input) return { conflict: false, kbClaim: '' };
+  return { conflict: Boolean(input.conflict), kbClaim: typeof input.kb_claim === 'string' ? input.kb_claim : '' };
 };

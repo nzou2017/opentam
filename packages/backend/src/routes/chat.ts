@@ -8,7 +8,7 @@ import { getStore } from '../db/index.js';
 import { runChatAgent } from '../agent/chatAgent.js';
 import { runDiscoveryStep } from '../agent/discovery.js';
 import { extractFacts } from '../agent/factExtractor.js';
-import { anthropicContradictionJudge } from '../agent/contradiction.js';
+import { defaultContradictionJudge } from '../agent/contradiction.js';
 import { chromaKnowledgeService } from '../services/knowledgeService.js';
 import { MODEL_BY_PLAN } from '../services/interventionService.js';
 import { config } from '../config.js';
@@ -106,7 +106,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           history: effectiveHistory,
           extractor: extractFacts,
           knowledge: chromaKnowledgeService,
-          judge: anthropicContradictionJudge,
+          judge: defaultContradictionJudge,
         });
       }
 
